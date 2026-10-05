@@ -1,0 +1,134 @@
+import fs from 'node:fs';
+import { parse } from 'smol-toml';
+import { projectConfigFile, userConfigFile } from './paths.js';
+
+export type PermissionMode = 'always-ask' | 'unrestricted';
+export type ThinkingDisplay = 'full' | 'collapsed' | 'hidden';
+
+export type Config = {
+	model: {
+		base_url: string;
+		name: string;
+		context_window: number;
+		api_key: string;
+	};
+	permissions: {
+		default_mode: PermissionMode;
+	};
+	instructions: {
+		filenames: string[];
+	};
+	ui: {
+		show_thinking: ThinkingDisplay;
+		colors: {
+			user: string;
+			assistant: string;
+			thinking: string;
+			accent: string;
+			diff_add: string;
+			diff_remove: string;
+		};
+	};
+};
+
+export const defaultConfig: Config = {
+	model: {
+		base_url: 'http://127.0.0.1:8080/v1',
+		name: 'qwen3.6-abliterated',
+		context_window: 65536,
+		api_key: '',
+	},
+	permissions: {
+		default_mode: 'always-ask',
+	},
+	instructions: {
+		filenames: ['JANE.md'],
+	},
+	ui: {
+		show_thinking: 'collapsed',
+		colors: {
+			user: 'cyan',
+			assistant: 'white',
+			thinking: 'gray',
+			accent: 'magenta',
+			diff_add: 'green',
+			diff_remove: 'red',
+		},
+	},
+};
+
+type Plain = Record<string, unknown>;
+
+function isPlain(value: unknown): value is Plain {
+	return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Deep-merge `override` onto `base`. Only keys that exist in `base` are taken,
+ * and only when the type matches, so a typo or wrong type in a config file is
+ * reported instead of silently breaking Jane.
+ */
+function merge(base: Plain, override: Plain, where: string, warnings: string[]): Plain {
+	const out: Plain = { ...base };
+	for (const [key, value] of Object.entries(override)) {
+		const name = where ? `${where}.${key}` : key;
+		if (!(key in base)) {
+			warnings.push(`unknown setting "${name}"`);
+			continue;
+		}
+		const current = base[key];
+		if (isPlain(current)) {
+			if (isPlain(value)) out[key] = merge(current, value, name, warnings);
+			else warnings.push(`"${name}" should be a table`);
+		} else if (Array.isArray(current)) {
+			if (Array.isArray(value) && value.every((v) => typeof v === 'string')) out[key] = value;
+			else warnings.push(`"${name}" should be a list of strings`);
+		} else if (typeof value === typeof current) {
+			out[key] = value;
+		} else {
+			warnings.push(`"${name}" should be a ${typeof current}`);
+		}
+	}
+	return out;
+}
+
+function validate(config: Config, warnings: string[]): void {
+	if (!['always-ask', 'unrestricted'].includes(config.permissions.default_mode)) {
+		warnings.push(`permissions.default_mode must be "always-ask" or "unrestricted"`);
+		config.permissions.default_mode = defaultConfig.permissions.default_mode;
+	}
+	if (!['full', 'collapsed', 'hidden'].includes(config.ui.show_thinking)) {
+		warnings.push(`ui.show_thinking must be "full", "collapsed" or "hidden"`);
+		config.ui.show_thinking = defaultConfig.ui.show_thinking;
+	}
+	if (config.instructions.filenames.length === 0) {
+		config.instructions.filenames = defaultConfig.instructions.filenames;
+	}
+	config.model.base_url = config.model.base_url.replace(/\/+$/, '');
+}
+
+export type LoadedConfig = { config: Config; warnings: string[] };
+
+/** Load defaults, then the user config, then the project config on top. */
+export function loadConfig(cwd: string, files = [userConfigFile, projectConfigFile(cwd)]): LoadedConfig {
+	const warnings: string[] = [];
+	let merged: Plain = structuredClone(defaultConfig) as unknown as Plain;
+	for (const file of files) {
+		let text: string;
+		try {
+			text = fs.readFileSync(file, 'utf8');
+		} catch {
+			continue;
+		}
+		try {
+			const fileWarnings: string[] = [];
+			merged = merge(merged, parse(text) as Plain, '', fileWarnings);
+			warnings.push(...fileWarnings.map((w) => `${file}: ${w}`));
+		} catch (error) {
+			warnings.push(`${file}: ${(error as Error).message.split('\n')[0]}`);
+		}
+	}
+	const config = merged as unknown as Config;
+	validate(config, warnings);
+	return { config, warnings };
+}
