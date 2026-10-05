@@ -110,7 +110,9 @@ export function SettingsMenu({ cwd, config, height, onSaved, onClose }: Props) {
 		else if (key.tab) setScope((s) => (s === 'user' ? 'project' : 'user'));
 		else if (choice && (key.return || input === ' ' || key.rightArrow)) cycle(1);
 		else if (choice && key.leftArrow) cycle(-1);
-		else if (key.return) {
+		else if (key.return && setting.type === 'readonly') {
+			setStatus({ text: `Edit ${setting.label} in ${tildify(scopeFile(scope, cwd))}`, tone: 'info' });
+		} else if (key.return) {
 			const text = formatValue(setting, getValue(config, setting.key), true);
 			setEditing({ text, cursor: text.length });
 			setStatus(null);
@@ -197,7 +199,7 @@ export function SettingsMenu({ cwd, config, height, onSaved, onClose }: Props) {
 			<Text dimColor>
 				{editing
 					? 'Enter to save · Esc to cancel'
-					: `↑/↓ move · ${choice ? '←/→ change' : 'Enter edit'} · Tab user/project · r reset · Esc close`}
+					: `↑/↓ move · ${choice ? '←/→ change' : setting.type === 'readonly' ? 'edit in the config file' : 'Enter edit'} · Tab user/project · r reset · Esc close`}
 			</Text>
 		</Box>
 	);

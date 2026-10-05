@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { Agent, type AgentEvents, type PermissionDecision } from '../src/agent.js';
+import { DEFAULT_BLOCK_PATTERNS, compileBlockList } from '../src/blocklist.js';
 import { ModelError } from '../src/client.js';
 import { Checkpoints } from '../src/checkpoints.js';
 import { Session, loadSession } from '../src/session.js';
@@ -209,5 +210,19 @@ describe('agent loop', () => {
 		await agent.run('next', recorder().events, new AbortController().signal);
 		expect(requests.at(-1).messages.at(-1)).toEqual({ role: 'user', content: '[Note from Jane: The user undid your changes.]\n\nnext' });
 		expect(agent.notes).toEqual([]);
+	});
+
+	it('refuses blocked commands in every mode, without asking', async () => {
+		for (const mode of ['unrestricted', 'always-ask'] as const) {
+			replies = [{ calls: [{ name: 'bash', args: '{"command":"touch ran.txt; rm -rf ~"}' }] }, { content: 'ok' }];
+			const agent = makeAgent(mode);
+			agent.blockRules = compileBlockList(DEFAULT_BLOCK_PATTERNS).rules;
+			const { log, events } = recorder();
+			expect(await agent.run('clean up', events, new AbortController().signal)).toBe('done');
+			expect(log.filter((l) => l.startsWith('ask'))).toEqual([]);
+			expect(log).toContain('end bash error');
+			expect(fs.existsSync(path.join(dir, 'ran.txt'))).toBe(false);
+			expect(requests.at(-1).messages.at(-1).content).toMatch(/^Error: this command was blocked by Jane's block list/);
+		}
 	});
 });

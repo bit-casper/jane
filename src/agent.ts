@@ -1,6 +1,7 @@
 import { type ChatMessage, type StreamResult, type ToolCall, streamChat } from './client.js';
 import type { PermissionMode } from './config.js';
 import type { Checkpoints } from './checkpoints.js';
+import { type BlockRule, blockedBy, describeRule } from './blocklist.js';
 import type { Session } from './session.js';
 import { findTool, parseArgs, toolSchemas, tools } from './tools/index.js';
 import { type Tool, type ToolDisplay, ToolError, type ToolResult } from './tools/types.js';
@@ -51,6 +52,8 @@ export class Agent {
 	/** Notes for the model, sent with the next user message (e.g. "the user undid these changes"). */
 	readonly notes: string[] = [];
 	private currentPrompt = '';
+	/** Bash commands matching these are refused, whatever the permission mode. */
+	blockRules: BlockRule[] = [];
 
 	constructor(
 		public settings: ModelSettings,
@@ -156,6 +159,17 @@ export class Agent {
 		const args = parsed.args;
 		const label = tool.label(args, { cwd: this.cwd });
 		const ctx = { cwd: this.cwd, signal };
+
+		const rule = tool.name === 'bash' ? blockedBy(String(args['command']), this.blockRules) : undefined;
+		if (rule) {
+			events.onToolStart?.({ id: call.id, name, label });
+			finish(label, { output: '', isError: true, display: { summary: `Blocked by the block list: ${describeRule(rule.pattern)}` } });
+			return {
+				output:
+					`Error: this command was blocked by Jane's block list (${describeRule(rule.pattern)}), so it did not run. ` +
+					'Do not try to get around the block list with a different command. If the command is really needed, tell the user and let them run it themselves.',
+			};
+		}
 
 		if (tool.needsPermission && this.mode === 'always-ask' && !this.allowedForSession.has(tool.name)) {
 			let preview: ToolDisplay = {};

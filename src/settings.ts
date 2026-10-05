@@ -7,7 +7,7 @@ import { type Config, defaultConfig } from './config.js';
 import { projectConfigFile, userConfigFile } from './paths.js';
 import { getPath, setTomlValue } from './toml-edit.js';
 
-export type SettingType = 'string' | 'secret' | 'number' | 'enum' | 'boolean' | 'list' | 'color';
+export type SettingType = 'string' | 'secret' | 'number' | 'enum' | 'boolean' | 'list' | 'color' | 'readonly';
 
 export type Setting = {
 	/** Dotted path in the config, e.g. "ui.colors.user". */
@@ -56,6 +56,8 @@ export const SETTINGS: Setting[] = [
 	},
 	{ key: 'skills.extra_dirs', section: 'Skills', label: 'Extra folders', type: 'list', allowEmpty: true, appliesWhen: 'new sessions (/clear)', description: 'More folders with skills in them, comma-separated.' },
 	{ key: 'checkpoints.enabled', section: 'Safety', label: 'Undo copies', type: 'boolean', description: 'Save a copy of each file before Jane writes or edits it, so /undo can put it back.' },
+	{ key: 'block_list.enabled', section: 'Safety', label: 'Block list', type: 'boolean', description: 'Refuse dangerous bash commands (rm -rf ~, mkfs, dd onto a disk…) in every permission mode.' },
+	{ key: 'block_list.patterns', section: 'Safety', label: 'Block patterns', type: 'readonly', description: 'The regular expressions for blocked commands. Edit them in the config file; r resets them to the built-in list.' },
 ];
 
 export type Scope = 'user' | 'project';
@@ -123,12 +125,15 @@ export function parseInput(setting: Setting, text: string): { value: unknown } |
 			if (raw === 'on' || raw === 'true') return { value: true };
 			if (raw === 'off' || raw === 'false') return { value: false };
 			return { error: 'Choose on or off.' };
+		case 'readonly':
+			return { error: 'Edit this one in the config file.' };
 	}
 }
 
 /** How a value is shown in the menu, and pre-filled when editing. */
 export function formatValue(setting: Setting, value: unknown, forEditing = false): string {
 	if (setting.type === 'boolean') return value ? 'on' : 'off';
+	if (setting.type === 'readonly' && Array.isArray(value)) return `${value.length} pattern${value.length === 1 ? '' : 's'}`;
 	if (setting.type === 'list') return (value as string[]).join(', ') || (forEditing ? '' : '(none)');
 	if (setting.type === 'secret' && !forEditing) return value ? '•'.repeat(8) : '(none)';
 	return String(value);
