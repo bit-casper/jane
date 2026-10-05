@@ -37,6 +37,8 @@ export type Tool<Args = Record<string, unknown>> = {
 	params: Record<string, ParamSpec>;
 	/** True if the tool can change things, so always-ask mode asks first. */
 	needsPermission: boolean;
+	/** Files the tool will change, so a checkpoint can be saved first for /undo. */
+	files?(args: Args, ctx: { cwd: string }): string[];
 	/** Short label for the UI, e.g. `src/app.ts` or the command. */
 	label(args: Args, ctx: { cwd: string }): string;
 	/** What to show in the permission prompt. Can throw a ToolError. */

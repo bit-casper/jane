@@ -6,6 +6,7 @@ import path from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { Agent, type AgentEvents, type PermissionDecision } from '../src/agent.js';
 import { ModelError } from '../src/client.js';
+import { Checkpoints } from '../src/checkpoints.js';
 import { Session, loadSession } from '../src/session.js';
 
 // A fake OpenAI-compatible server. Each test queues the replies it should stream.
@@ -181,5 +182,32 @@ describe('agent loop', () => {
 		expect(saved?.label).toBe('a.txt');
 		expect(saved?.result.display?.summary).toBe('1 line added, 1 removed');
 		expect(saved?.result.display?.diff).toHaveLength(2);
+	});
+
+	it('saves checkpoints for write and edit, and tells the model about an undo', async () => {
+		fs.writeFileSync(path.join(dir, 'a.txt'), 'old\n');
+		replies = [
+			{ calls: [{ name: 'edit', args: '{"path":"a.txt","old_string":"old","new_string":"new"}' }] },
+			{ calls: [{ name: 'edit', args: '{"path":"a.txt","old_string":"missing","new_string":"x"}' }] },
+			{ calls: [{ name: 'write', args: '{"path":"b.txt","content":"b"}' }] },
+			{ content: 'done' },
+		];
+		const agent = makeAgent();
+		agent.checkpoints = new Checkpoints(path.join(dir, '.cp'));
+		await agent.run('change things', recorder().events, new AbortController().signal);
+		const changes = agent.checkpoints.list();
+		// The failed edit left no checkpoint.
+		expect(changes.map((c) => `${c.tool} ${c.label}`)).toEqual(['write b.txt', 'edit a.txt']);
+		expect(changes[0]!.prompt).toBe('change things');
+
+		agent.checkpoints.undo(changes);
+		expect(fs.readFileSync(path.join(dir, 'a.txt'), 'utf8')).toBe('old\n');
+		expect(fs.existsSync(path.join(dir, 'b.txt'))).toBe(false);
+
+		agent.notes.push('The user undid your changes.');
+		replies = [{ content: 'ok' }];
+		await agent.run('next', recorder().events, new AbortController().signal);
+		expect(requests.at(-1).messages.at(-1)).toEqual({ role: 'user', content: '[Note from Jane: The user undid your changes.]\n\nnext' });
+		expect(agent.notes).toEqual([]);
 	});
 });

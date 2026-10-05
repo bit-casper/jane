@@ -7,7 +7,7 @@ import { type Config, defaultConfig } from './config.js';
 import { projectConfigFile, userConfigFile } from './paths.js';
 import { getPath, setTomlValue } from './toml-edit.js';
 
-export type SettingType = 'string' | 'secret' | 'number' | 'enum' | 'list' | 'color';
+export type SettingType = 'string' | 'secret' | 'number' | 'enum' | 'boolean' | 'list' | 'color';
 
 export type Setting = {
 	/** Dotted path in the config, e.g. "ui.colors.user". */
@@ -55,6 +55,7 @@ export const SETTINGS: Setting[] = [
 		description: 'Which skill folders to load, comma-separated: jane (~/.config/jane/skills, .jane/skills), claude (~/.claude/skills, .claude/skills), omarchy.',
 	},
 	{ key: 'skills.extra_dirs', section: 'Skills', label: 'Extra folders', type: 'list', allowEmpty: true, appliesWhen: 'new sessions (/clear)', description: 'More folders with skills in them, comma-separated.' },
+	{ key: 'checkpoints.enabled', section: 'Safety', label: 'Undo copies', type: 'boolean', description: 'Save a copy of each file before Jane writes or edits it, so /undo can put it back.' },
 ];
 
 export type Scope = 'user' | 'project';
@@ -118,11 +119,16 @@ export function parseInput(setting: Setting, text: string): { value: unknown } |
 		}
 		case 'secret':
 			return { value: raw };
+		case 'boolean':
+			if (raw === 'on' || raw === 'true') return { value: true };
+			if (raw === 'off' || raw === 'false') return { value: false };
+			return { error: 'Choose on or off.' };
 	}
 }
 
 /** How a value is shown in the menu, and pre-filled when editing. */
 export function formatValue(setting: Setting, value: unknown, forEditing = false): string {
+	if (setting.type === 'boolean') return value ? 'on' : 'off';
 	if (setting.type === 'list') return (value as string[]).join(', ') || (forEditing ? '' : '(none)');
 	if (setting.type === 'secret' && !forEditing) return value ? '•'.repeat(8) : '(none)';
 	return String(value);

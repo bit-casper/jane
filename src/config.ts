@@ -26,6 +26,10 @@ export type Config = {
 		/** More folders with skills in them. */
 		extra_dirs: string[];
 	};
+	checkpoints: {
+		/** Save a copy of each file before Jane changes it, for /undo. */
+		enabled: boolean;
+	};
 	ui: {
 		show_thinking: ThinkingDisplay;
 		/** Where colours come from when the config doesn't set them. */
@@ -57,6 +61,9 @@ export const defaultConfig: Config = {
 	skills: {
 		sources: ['jane', 'claude', 'omarchy'],
 		extra_dirs: [],
+	},
+	checkpoints: {
+		enabled: true,
 	},
 	ui: {
 		show_thinking: 'collapsed',

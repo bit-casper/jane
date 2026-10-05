@@ -84,6 +84,7 @@ export const writeTool: Tool<WriteArgs> = {
 		content: { type: 'string', description: 'The full content of the file', required: true },
 	},
 	needsPermission: true,
+	files: (args, { cwd }) => [resolvePath(cwd, args.path)],
 	label: (args, { cwd }) => displayPath(cwd, resolvePath(cwd, args.path)),
 	async preview(args, { cwd }) {
 		const file = resolvePath(cwd, args.path);
@@ -141,6 +142,7 @@ export const editTool: Tool<EditArgs> = {
 		replace_all: { type: 'boolean', description: 'Replace every occurrence (default false)' },
 	},
 	needsPermission: true,
+	files: (args, { cwd }) => [resolvePath(cwd, args.path)],
 	label: (args, { cwd }) => displayPath(cwd, resolvePath(cwd, args.path)),
 	async preview(args, { cwd }) {
 		const file = resolvePath(cwd, args.path);

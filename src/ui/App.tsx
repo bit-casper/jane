@@ -1,10 +1,11 @@
 import path from 'node:path';
 import { Box, Static, Text, useApp, useInput, useWindowSize } from 'ink';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Agent, MAX_BAD_CALLS, type PermissionDecision, type PermissionRequest, estimateTokens } from '../agent.js';
+import { Agent, MAX_BAD_CALLS, stripNotes, type PermissionDecision, type PermissionRequest, estimateTokens } from '../agent.js';
 import { type ChatMessage, ModelError, listModels } from '../client.js';
 import { type Config, type PermissionMode, loadConfig } from '../config.js';
 import { type InstructionFile, loadInstructions } from '../instructions.js';
+import { type Change, Checkpoints } from '../checkpoints.js';
 import { log } from '../log.js';
 import { watchOmarchyTheme } from '../omarchy.js';
 import { tildify } from '../paths.js';
@@ -28,6 +29,7 @@ import { Input, type Suggestion } from './Input.js';
 import { PermissionPrompt } from './PermissionPrompt.js';
 import { ResumePicker } from './ResumePicker.js';
 import { SettingsMenu } from './SettingsMenu.js';
+import { UndoPicker } from './UndoPicker.js';
 import { renderMarkdown } from './markdown.js';
 import { ThemeContext, useColors } from './theme.js';
 
@@ -59,6 +61,7 @@ const COMMANDS: Suggestion[] = [
 	{ name: 'permissions', description: 'Switch permission mode' },
 	{ name: 'settings', description: 'Change Jane\'s settings' },
 	{ name: 'skills', description: 'List the skills Jane can use' },
+	{ name: 'undo', description: 'Undo file changes Jane made' },
 	{ name: 'help', description: 'Commands and keys' },
 	{ name: 'exit', description: 'Quit Jane' },
 ];
@@ -70,6 +73,7 @@ const HELP = `Commands
   /settings           Change settings (saved to your user or project config)
   /skills             List the skills Jane can use
   /<skill> [request]  Run a skill, e.g. /omarchy change the gaps
+  /undo               Undo file changes Jane made
   /help               Show this help
   /exit               Quit
 
@@ -90,7 +94,7 @@ function itemsFromMessages(messages: ChatMessage[], displays: Map<string, ToolDi
 	const results = new Map<string, string>();
 	for (const m of messages) if (m.role === 'tool') results.set(m.tool_call_id, m.content);
 	for (const m of messages) {
-		if (m.role === 'user') items.push({ key: key(), kind: 'user', text: typedText(m.content) });
+		if (m.role === 'user') items.push({ key: key(), kind: 'user', text: typedText(stripNotes(m.content)) });
 		else if (m.role === 'assistant') {
 			if (m.content?.trim()) items.push({ key: key(), kind: 'assistant', text: m.content });
 			for (const call of m.tool_calls ?? []) {
@@ -180,6 +184,7 @@ function Main({ config, setConfig, overrides, warnings, version, cwd, start, cle
 	const [startedAt, setStartedAt] = useState(0);
 	const [panel, setPanel] = useState<'settings' | null>(null);
 	const overridesRef = useRef<Overrides>({ ...overrides });
+	const [undoList, setUndoList] = useState<Change[] | null>(null);
 
 	const agentRef = useRef<Agent | null>(null);
 	const abortRef = useRef<AbortController | null>(null);
@@ -222,11 +227,12 @@ function Main({ config, setConfig, overrides, warnings, version, cwd, start, cle
 				messages,
 			);
 			if (found.skills.some((s) => !s.userOnly)) agent.tools = [...baseTools, makeSkillTool(() => skillsRef.current)];
+			if (config.checkpoints.enabled) agent.checkpoints = new Checkpoints(session.file.replace(/\.jsonl$/, '.checkpoints'));
 			agentRef.current = agent;
 			setModeState(startMode);
 			setModel(agent.settings.model);
 			setTokens(estimateTokens(messages, agent.tools) + Math.ceil(agent.system.length / 4));
-			setPromptHistory(messages.flatMap((m) => (m.role === 'user' ? [typedText(m.content)] : [])));
+			setPromptHistory(messages.flatMap((m) => (m.role === 'user' ? [typedText(stripNotes(m.content))] : [])));
 
 			const head: HistoryItem[] = [{ key: key(), kind: 'banner' }];
 			for (const w of warnings) head.push({ key: key(), kind: 'info', text: `Config: ${w}`, tone: 'warning' });
@@ -382,6 +388,19 @@ function Main({ config, setConfig, overrides, warnings, version, cwd, start, cle
 			case 'settings':
 				setPanel('settings');
 				return;
+			case 'undo': {
+				if (!agent.checkpoints) {
+					info('Checkpoints are turned off (checkpoints.enabled = false), so there is nothing to undo.');
+					return;
+				}
+				const changes = agent.checkpoints.list();
+				if (changes.length === 0) {
+					info("Nothing to undo in this session. (Changes made by bash commands can't be undone.)");
+					return;
+				}
+				setUndoList(changes);
+				return;
+			}
 			case 'permissions': {
 				const next = arg ? arg : mode === 'always-ask' ? 'unrestricted' : 'always-ask';
 				if (next !== 'always-ask' && next !== 'unrestricted') {
@@ -467,6 +486,9 @@ function Main({ config, setConfig, overrides, warnings, version, cwd, start, cle
 				agent.session.setModel(next.model.name);
 				setModel(next.model.name);
 			}
+			if (key === 'checkpoints.enabled') {
+				agent.checkpoints = next.checkpoints.enabled ? new Checkpoints(agent.session.file.replace(/\.jsonl$/, '.checkpoints')) : undefined;
+			}
 			if (key === 'instructions.filenames') {
 				const instructions = loadInstructions(cwd, next.instructions.filenames);
 				instructionsRef.current = instructions;
@@ -482,8 +504,22 @@ function Main({ config, setConfig, overrides, warnings, version, cwd, start, cle
 		setConfig(next);
 	};
 
+	const undoFinished = (undone: Change[] | null, error?: string) => {
+		setUndoList(null);
+		if (error) return info(error, 'error');
+		if (!undone) return;
+		const cwdPath = (f: string) => (f.startsWith(cwd + path.sep) ? path.relative(cwd, f) : tildify(f));
+		const what = undone.map((c) => `${toolTitle(c.tool)} ${c.files.map((f) => cwdPath(f.path)).join(', ')}`);
+		info(`Undid ${undone.length === 1 ? 'a change' : `${undone.length} changes`}: ${what.join('; ')}`);
+		const files = [...new Set(undone.flatMap((c) => c.files.map((f) => f.path)))];
+		agentRef.current?.notes.push(
+			`The user undid ${undone.length === 1 ? 'one of your file changes' : `${undone.length} of your file changes`} (${what.join('; ')}). ` +
+				`These files are back to how they were before: ${files.join(', ')}. The user did this on purpose: do not redo these changes unless they ask you to. Read the files again before you change them.`,
+		);
+	};
+
 	useInput((char, k) => {
-		if (phase !== 'chat' || panel) return;
+		if (phase !== 'chat' || panel || undoList) return;
 		if (k.ctrl && char === 'c') {
 			if (busy) {
 				abortRef.current?.abort();
@@ -594,7 +630,10 @@ function Main({ config, setConfig, overrides, warnings, version, cwd, start, cle
 			{panel === 'settings' && (
 				<SettingsMenu cwd={cwd} config={config} height={rows} onSaved={(s) => settingSaved(s.key)} onClose={() => setPanel(null)} />
 			)}
-			{!permission && !panel && <Input
+			{undoList && agentRef.current?.checkpoints && (
+				<UndoPicker changes={undoList} checkpoints={agentRef.current.checkpoints} cwd={cwd} height={rows} onDone={undoFinished} />
+			)}
+			{!permission && !panel && !undoList && <Input
 				value={input}
 				onChange={setInput}
 				onSubmit={submit}
