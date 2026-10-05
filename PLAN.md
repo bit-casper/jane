@@ -203,8 +203,8 @@ Anything not listed above, including skills, `/compact`, checkpoints and
 
 ## Workflow
 
-- Repo: `github.com/bit-casper/jane` (public), with merged branches deleted
-  automatically.
+- Repo: `github.com/bit-casper/jane` (public, MIT licence), with merged
+  branches deleted automatically.
 - Each change goes on its own branch from an up-to-date `main`, and is built,
   run and tested locally before a PR is opened.
 - Each PR says what changed and how it was tested. Casper reviews and merges.
@@ -213,7 +213,5 @@ Anything not listed above, including skills, `/compact`, checkpoints and
 
 ## Open questions
 
-- **Licence:** Jane is a public repo but has no licence yet. Pick one (e.g.
-  MIT) before or with the v1 PR.
 - **Banner:** the exact look of the "JANE" letters (font and colours) is to be
   chosen during v1.
