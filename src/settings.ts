@@ -19,6 +19,8 @@ export type Setting = {
 	options?: readonly string[];
 	/** Shown after a change when it doesn't take effect right away. */
 	appliesWhen?: string;
+	/** For lists: an empty list is allowed. */
+	allowEmpty?: boolean;
 };
 
 export const COLOR_NAMES = [
@@ -48,6 +50,11 @@ export const SETTINGS: Setting[] = [
 	{ key: 'ui.colors.accent', section: 'Colours', label: 'Accent', type: 'color', description: 'Banner, borders and highlights. A colour name or hex.' },
 	{ key: 'ui.colors.diff_add', section: 'Colours', label: 'Added lines', type: 'color', description: 'Added lines in diffs. A colour name or hex.' },
 	{ key: 'ui.colors.diff_remove', section: 'Colours', label: 'Removed lines', type: 'color', description: 'Removed lines in diffs, and errors. A colour name or hex.' },
+	{
+		key: 'skills.sources', section: 'Skills', label: 'Sources', type: 'list', allowEmpty: true, appliesWhen: 'new sessions (/clear)',
+		description: 'Which skill folders to load, comma-separated: jane (~/.config/jane/skills, .jane/skills), claude (~/.claude/skills, .claude/skills), omarchy.',
+	},
+	{ key: 'skills.extra_dirs', section: 'Skills', label: 'Extra folders', type: 'list', allowEmpty: true, appliesWhen: 'new sessions (/clear)', description: 'More folders with skills in them, comma-separated.' },
 ];
 
 export type Scope = 'user' | 'project';
@@ -93,7 +100,7 @@ export function parseInput(setting: Setting, text: string): { value: unknown } |
 		}
 		case 'list': {
 			const items = raw.split(',').map((s) => s.trim()).filter(Boolean);
-			if (items.length === 0) return { error: 'Enter at least one name.' };
+			if (items.length === 0 && !setting.allowEmpty) return { error: 'Enter at least one name.' };
 			return { value: items };
 		}
 		case 'color': {
@@ -116,7 +123,7 @@ export function parseInput(setting: Setting, text: string): { value: unknown } |
 
 /** How a value is shown in the menu, and pre-filled when editing. */
 export function formatValue(setting: Setting, value: unknown, forEditing = false): string {
-	if (setting.type === 'list') return (value as string[]).join(', ');
+	if (setting.type === 'list') return (value as string[]).join(', ') || (forEditing ? '' : '(none)');
 	if (setting.type === 'secret' && !forEditing) return value ? '•'.repeat(8) : '(none)';
 	return String(value);
 }

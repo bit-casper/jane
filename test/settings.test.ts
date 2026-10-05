@@ -128,3 +128,12 @@ describe('settings', () => {
 		});
 	});
 });
+
+describe('settings for skills', () => {
+	it('allows an empty list where it makes sense', () => {
+		const sources = SETTINGS.find((s) => s.key === 'skills.sources')!;
+		expect(parseInput(sources, '')).toEqual({ value: [] });
+		expect(formatValue(sources, [])).toBe('(none)');
+		expect(parseInput(SETTINGS.find((s) => s.key === 'instructions.filenames')!, '')).toHaveProperty('error');
+	});
+});

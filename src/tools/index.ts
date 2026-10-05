@@ -6,8 +6,8 @@ import type { Tool } from './types.js';
 
 export const tools: Tool<any>[] = [readTool, writeTool, editTool, bashTool, globTool, grepTool];
 
-export function findTool(name: string): Tool<any> | undefined {
-	return tools.find((t) => t.name === name);
+export function findTool(name: string, list: Tool<any>[] = tools): Tool<any> | undefined {
+	return list.find((t) => t.name === name);
 }
 
 export function toolSchemas(list: Tool<any>[] = tools): ToolSchema[] {
