@@ -2,10 +2,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { render } from 'ink';
-import { loadConfig } from './config.js';
+import { type PermissionMode, loadConfig } from './config.js';
 import { log } from './log.js';
 import { listSessions } from './session.js';
-import { App, type Start } from './ui/App.js';
+import { App, type Overrides, type Start, applyOverrides } from './ui/App.js';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const version = (JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')) as { version: string }).version;
@@ -58,11 +58,9 @@ if (!process.stdin.isTTY || !process.stdout.isTTY) fail('Jane needs an interacti
 
 const cwd = process.cwd();
 const { config, warnings } = loadConfig(cwd);
-if (args.model) config.model.name = args.model;
-if (args.mode) {
-	if (args.mode !== 'always-ask' && args.mode !== 'unrestricted') fail('--mode must be "always-ask" or "unrestricted"');
-	config.permissions.default_mode = args.mode;
-}
+if (args.mode && args.mode !== 'always-ask' && args.mode !== 'unrestricted') fail('--mode must be "always-ask" or "unrestricted"');
+const overrides: Overrides = { model: args.model, mode: args.mode as PermissionMode | undefined };
+applyOverrides(config, overrides);
 
 let start: Start = { kind: 'new' };
 if (args.continue || args.resume) {
@@ -85,6 +83,7 @@ let exitInfo: { sessionId?: string; started: boolean } = { started: false };
 const instance = render(
 	<App
 		config={config}
+		overrides={overrides}
 		warnings={warnings}
 		version={version}
 		cwd={cwd}
