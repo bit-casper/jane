@@ -66,8 +66,8 @@ All of these follow `XDG_*` variables when set.
   prompt, message count) to choose from. `jane --resume <id>` opens one
   directly.
 - `jane --version` and `jane --help`.
-- The banner shows "JANE" in ASCII letters, plus the Jane version, the model
-  name and the working directory.
+- The banner shows "JANE" in shaded block letters (in the accent colour), plus
+  the Jane version, the model name and the working directory.
 
 ### Conversation
 
@@ -210,8 +210,3 @@ Anything not listed above, including skills, `/compact`, checkpoints and
 - Each PR says what changed and how it was tested. Casper reviews and merges.
 - After a merge: switch to `main`, pull, `git fetch --prune`, delete the
   branch.
-
-## Open questions
-
-- **Banner:** the exact look of the "JANE" letters (font and colours) is to be
-  chosen during v1.
