@@ -5,6 +5,7 @@ import { tildify } from '../paths.js';
 import {
 	SETTINGS,
 	type Scope,
+	defaultValue,
 	type Setting,
 	formatValue,
 	getValue,
@@ -177,7 +178,9 @@ export function SettingsMenu({ cwd, config, height, onSaved, onClose }: Props) {
 								<Text>
 									{s.type === 'color' && <Text color={String(value)}>■ </Text>}
 									{s.type === 'enum' && active ? `‹ ${formatValue(s, value)} ›` : formatValue(s, value)}
-									<Text dimColor>{source === 'default' ? '' : `  (${source})`}</Text>
+									<Text dimColor>
+										{source !== 'default' ? `  (${source})` : s.type === 'color' && value !== defaultValue(s.key) ? '  (theme)' : ''}
+									</Text>
 								</Text>
 							)}
 						</Text>

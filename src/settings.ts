@@ -41,6 +41,7 @@ export const SETTINGS: Setting[] = [
 		description: 'Instruction files to look for, in order; the first one found is used. Comma-separated, e.g. JANE.md, AGENTS.md, CLAUDE.md',
 	},
 	{ key: 'ui.show_thinking', section: 'Display', label: 'Show thinking', type: 'enum', options: ['collapsed', 'full', 'hidden'], description: 'How to show the model\'s thinking: one line, all of it, or not at all.' },
+	{ key: 'ui.theme', section: 'Display', label: 'Theme', type: 'enum', options: ['omarchy', 'none'], description: 'omarchy: use the colours of your current Omarchy theme (colours you set below still win). none: only the colours below.' },
 	{ key: 'ui.colors.user', section: 'Colours', label: 'Your messages', type: 'color', description: 'A colour name (cyan, magentaBright…) or hex (#88c0d0).' },
 	{ key: 'ui.colors.assistant', section: 'Colours', label: 'Jane\'s replies', type: 'color', description: 'A colour name (cyan, magentaBright…) or hex (#88c0d0).' },
 	{ key: 'ui.colors.thinking', section: 'Colours', label: 'Thinking', type: 'color', description: 'A colour name (cyan, magentaBright…) or hex (#88c0d0).' },

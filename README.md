@@ -92,6 +92,7 @@ filenames = ["JANE.md"]       # first one found wins, e.g. ["JANE.md", "AGENTS.m
 
 [ui]
 show_thinking = "collapsed"   # "full" | "collapsed" | "hidden"
+theme = "omarchy"             # "omarchy" | "none"
 
 [ui.colors]                   # names ("cyan") or hex ("#88c0d0")
 user = "cyan"
@@ -101,6 +102,23 @@ accent = "magenta"
 diff_add = "green"
 diff_remove = "red"
 ```
+
+### Omarchy theme
+
+On [Omarchy](https://omarchy.org), Jane uses the colours of your current
+theme, and follows along when you switch: new output uses the new colours
+straight away, and the conversation so far is redrawn in them (after the
+current reply finishes, if Jane is busy). Colours you set in `[ui.colors]` win
+over the theme. Set `ui.theme = "none"` to use only the config colours.
+
+| Jane | Omarchy theme colour |
+|---|---|
+| `user` | `cyan` |
+| `assistant` | `foreground` |
+| `thinking` | `foreground` mixed 40% with `background` |
+| `accent` | `accent` |
+| `diff_add` | `green` |
+| `diff_remove` | `red` |
 
 ## Where Jane keeps things
 

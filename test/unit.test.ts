@@ -24,7 +24,7 @@ afterEach(() => {
 
 describe('config', () => {
 	it('uses defaults when there are no files', () => {
-		const { config, warnings } = loadConfig(dir, [path.join(dir, 'nope.toml')]);
+		const { config, warnings } = loadConfig(dir, [path.join(dir, 'nope.toml')], () => undefined);
 		expect(config).toEqual(defaultConfig);
 		expect(warnings).toEqual([]);
 	});
@@ -34,7 +34,7 @@ describe('config', () => {
 		const project = path.join(dir, 'project.toml');
 		fs.writeFileSync(user, '[model]\nname = "a"\nbase_url = "http://x/v1/"\n[ui.colors]\nuser = "#ff0000"\n');
 		fs.writeFileSync(project, '[model]\nname = "b"\ncontext_window = "big"\n[instructions]\nfilenames = ["AGENTS.md", "JANE.md"]\ntypo = 1\n');
-		const { config, warnings } = loadConfig(dir, [user, project]);
+		const { config, warnings } = loadConfig(dir, [user, project], () => undefined);
 		expect(config.model.name).toBe('b');
 		expect(config.model.base_url).toBe('http://x/v1');
 		expect(config.model.context_window).toBe(65536);
@@ -47,7 +47,7 @@ describe('config', () => {
 	it('rejects an invalid permission mode', () => {
 		const file = path.join(dir, 'c.toml');
 		fs.writeFileSync(file, '[permissions]\ndefault_mode = "yolo"\n');
-		const { config, warnings } = loadConfig(dir, [file]);
+		const { config, warnings } = loadConfig(dir, [file], () => undefined);
 		expect(config.permissions.default_mode).toBe('always-ask');
 		expect(warnings).toHaveLength(1);
 	});

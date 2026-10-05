@@ -1,9 +1,11 @@
 import fs from 'node:fs';
 import { parse } from 'smol-toml';
+import { readOmarchyColors } from './omarchy.js';
 import { projectConfigFile, userConfigFile } from './paths.js';
 
 export type PermissionMode = 'always-ask' | 'unrestricted';
 export type ThinkingDisplay = 'full' | 'collapsed' | 'hidden';
+export type ThemeSource = 'omarchy' | 'none';
 
 export type Config = {
 	model: {
@@ -20,6 +22,8 @@ export type Config = {
 	};
 	ui: {
 		show_thinking: ThinkingDisplay;
+		/** Where colours come from when the config doesn't set them. */
+		theme: ThemeSource;
 		colors: {
 			user: string;
 			assistant: string;
@@ -46,6 +50,7 @@ export const defaultConfig: Config = {
 	},
 	ui: {
 		show_thinking: 'collapsed',
+		theme: 'omarchy',
 		colors: {
 			user: 'cyan',
 			assistant: 'white',
@@ -101,17 +106,35 @@ function validate(config: Config, warnings: string[]): void {
 		warnings.push(`ui.show_thinking must be "full", "collapsed" or "hidden"`);
 		config.ui.show_thinking = defaultConfig.ui.show_thinking;
 	}
+	if (!['omarchy', 'none'].includes(config.ui.theme)) {
+		warnings.push(`ui.theme must be "omarchy" or "none"`);
+		config.ui.theme = defaultConfig.ui.theme;
+	}
 	if (config.instructions.filenames.length === 0) {
 		config.instructions.filenames = defaultConfig.instructions.filenames;
 	}
 	config.model.base_url = config.model.base_url.replace(/\/+$/, '');
 }
 
-export type LoadedConfig = { config: Config; warnings: string[] };
+export type LoadedConfig = {
+	config: Config;
+	warnings: string[];
+	/** Colours that came from the Omarchy theme rather than a config file or the defaults. */
+	themed: (keyof Config['ui']['colors'])[];
+};
 
-/** Load defaults, then the user config, then the project config on top. */
-export function loadConfig(cwd: string, files = [userConfigFile, projectConfigFile(cwd)]): LoadedConfig {
+/**
+ * Load defaults, then the user config, then the project config on top. With
+ * `ui.theme = "omarchy"`, colours not set in a config file come from the
+ * active Omarchy theme.
+ */
+export function loadConfig(
+	cwd: string,
+	files = [userConfigFile, projectConfigFile(cwd)],
+	themeColors: () => Partial<Config['ui']['colors']> | undefined = readOmarchyColors,
+): LoadedConfig {
 	const warnings: string[] = [];
+	const setColors = new Set<string>();
 	let merged: Plain = structuredClone(defaultConfig) as unknown as Plain;
 	for (const file of files) {
 		let text: string;
@@ -122,7 +145,10 @@ export function loadConfig(cwd: string, files = [userConfigFile, projectConfigFi
 		}
 		try {
 			const fileWarnings: string[] = [];
-			merged = merge(merged, parse(text) as Plain, '', fileWarnings);
+			const data = parse(text) as Plain;
+			merged = merge(merged, data, '', fileWarnings);
+			const colors = isPlain(data['ui']) && isPlain(data['ui']['colors']) ? data['ui']['colors'] : {};
+			for (const key of Object.keys(colors)) setColors.add(key);
 			warnings.push(...fileWarnings.map((w) => `${file}: ${w}`));
 		} catch (error) {
 			warnings.push(`${file}: ${(error as Error).message.split('\n')[0]}`);
@@ -130,5 +156,14 @@ export function loadConfig(cwd: string, files = [userConfigFile, projectConfigFi
 	}
 	const config = merged as unknown as Config;
 	validate(config, warnings);
-	return { config, warnings };
+	const themed: LoadedConfig['themed'] = [];
+	if (config.ui.theme === 'omarchy') {
+		const theme = themeColors() ?? {};
+		for (const [key, value] of Object.entries(theme) as [keyof Config['ui']['colors'], string][]) {
+			if (setColors.has(key)) continue;
+			config.ui.colors[key] = value;
+			themed.push(key);
+		}
+	}
+	return { config, warnings, themed };
 }
