@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import fs from 'node:fs';
 import { type Tool, ToolError, displayPath, plural, resolvePath, truncateMiddle } from './types.js';
 
 const MAX_FILES = 200;
@@ -27,6 +28,19 @@ function rg(args: string[], cwd: string, signal: AbortSignal): Promise<string> {
 
 type GlobArgs = { pattern: string; path?: string };
 
+/**
+ * Split a pattern into the folder to search from and the glob to use there,
+ * e.g. "/etc/x/*.conf" -> ["/etc/x", "*.conf"] and "../lib/**\/*.ts" -> ["../lib", "**\/*.ts"].
+ * ripgrep's --glob only matches paths relative to where it searches.
+ */
+export function splitGlob(pattern: string): { base: string; glob: string } {
+	const parts = pattern.split('/');
+	const firstGlob = parts.findIndex((p) => /[*?[\]{}]/.test(p));
+	if (firstGlob === -1) return { base: parts.slice(0, -1).join('/') || (pattern.startsWith('/') ? '/' : '.'), glob: parts.at(-1)! };
+	const base = parts.slice(0, firstGlob).join('/');
+	return { base: base || (pattern.startsWith('/') ? '/' : '.'), glob: parts.slice(firstGlob).join('/') };
+}
+
 export const globTool: Tool<GlobArgs> = {
 	name: 'glob',
 	description:
@@ -39,8 +53,16 @@ export const globTool: Tool<GlobArgs> = {
 	needsPermission: false,
 	label: (args) => args.pattern + (args.path ? ` in ${args.path}` : ''),
 	async run(args, { cwd, signal }) {
-		const root = resolvePath(cwd, args.path ?? '.');
-		const out = await rg(['--files', '--hidden', '--glob', '!.git', '--glob', args.pattern, '--sortr', 'modified'], root, signal);
+		const { base, glob } = splitGlob(args.pattern);
+		const root = resolvePath(resolvePath(cwd, args.path ?? '.'), base);
+		try {
+			if (!fs.statSync(root).isDirectory()) throw new Error();
+		} catch {
+			return { output: `No files found: ${displayPath(cwd, root)} is not a folder.`, display: { summary: 'No files found' } };
+		}
+		// "dir/*.ts" means files directly in dir; a leading / anchors the glob there (gitignore rules).
+		const anchored = base !== '.' && !glob.includes('/') ? `/${glob}` : glob;
+		const out = await rg(['--files', '--hidden', '--glob', '!.git', '--glob', anchored, '--sortr', 'modified'], root, signal);
 		const files = out.split('\n').filter(Boolean);
 		if (files.length === 0) return { output: 'No files found.', display: { summary: 'No files found' } };
 		const shown = files.slice(0, MAX_FILES).map((f) => displayPath(cwd, resolvePath(root, f)));

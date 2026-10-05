@@ -254,3 +254,32 @@ describe('editor', () => {
 		expect(ed.backspace({ text: 'ab', cursor: 0 })).toEqual({ text: 'ab', cursor: 0 });
 	});
 });
+
+describe('fixes', () => {
+	it('globs with absolute, home and parent-folder patterns', async () => {
+		const { splitGlob } = await import('../src/tools/search.js');
+		expect(splitGlob('/etc/x/*.conf')).toEqual({ base: '/etc/x', glob: '*.conf' });
+		expect(splitGlob('../lib/**/*.ts')).toEqual({ base: '../lib', glob: '**/*.ts' });
+		expect(splitGlob('**/*.ts')).toEqual({ base: '.', glob: '**/*.ts' });
+		expect(splitGlob('/*.md')).toEqual({ base: '/', glob: '*.md' });
+
+		fs.mkdirSync(path.join(dir, 'conf/sub'), { recursive: true });
+		fs.writeFileSync(path.join(dir, 'conf/a.conf'), '');
+		fs.writeFileSync(path.join(dir, 'conf/sub/b.conf'), '');
+		const project = path.join(dir, 'project');
+		fs.mkdirSync(project);
+		const c = { cwd: project, signal: new AbortController().signal };
+		expect((await globTool.run({ pattern: path.join(dir, 'conf/*.conf') }, c)).output).toBe(path.join(dir, 'conf/a.conf'));
+		expect((await globTool.run({ pattern: '../conf/**/*.conf' }, c)).output.split('\n').sort()).toEqual([
+			path.join(dir, 'conf/a.conf'),
+			path.join(dir, 'conf/sub/b.conf'),
+		]);
+		expect((await globTool.run({ pattern: '/nope/here/*.x' }, c)).output).toBe('No files found: /nope/here is not a folder.');
+	});
+
+	it('keeps single line breaks in replies', async () => {
+		const { renderMarkdown } = await import('../src/ui/markdown.js');
+		const out = renderMarkdown('Line one\nLine two\nLine three', 'white', 'magenta', 80).replace(/\x1b\[[0-9;]*m/g, '');
+		expect(out).toBe('Line one\nLine two\nLine three');
+	});
+});

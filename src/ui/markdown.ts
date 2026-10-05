@@ -30,6 +30,8 @@ function renderer(color: string, accent: string, width: number): Marked {
 				tab: 2,
 			}) as never,
 		);
+		// Keep single line breaks: in a terminal, a line break the model wrote is meant (poems, lists of lines, addresses).
+		marked.use({ breaks: true });
 		cache.set(key, marked);
 	}
 	return marked;
