@@ -25,6 +25,8 @@ export type Setting = {
 	unit?: string;
 	/** `r` can't reset it (resetting would throw away something the user wrote by hand). */
 	noReset?: boolean;
+	/** How an empty value is shown, e.g. "(built-in)". */
+	emptyLabel?: string;
 };
 
 export const COLOR_NAMES = [
@@ -38,6 +40,11 @@ export const SETTINGS: Setting[] = [
 	{ key: 'model.context_window', section: 'Model', label: 'Context window', type: 'number', description: 'How many tokens the model can hold. Match the server (llama-server -c).' },
 	{ key: 'compact.auto', section: 'Model', label: 'Auto compact', type: 'boolean', description: 'Summarise the conversation automatically when the context gets full, so long sessions keep working.' },
 	{ key: 'compact.at_percent', section: 'Model', label: 'Compact at %', type: 'number', description: 'How full the context gets (10–95%) before Jane compacts automatically.' },
+	{
+		key: 'startup.host', section: 'Model', label: 'Default host', type: 'string', allowEmpty: true, emptyLabel: '(first that answers)',
+		appliesWhen: 'the next start',
+		description: 'The host Jane tries first when she starts: "local" for this computer, or the name of one of your other hosts. Empty: the first host in your list that answers. /host switches during a session.',
+	},
 	{
 		key: 'hosts', section: 'Model', label: 'Other hosts', type: 'readonly', unit: 'host', noReset: true,
 		description: 'Other machines to use when they\'re reachable, like a stronger PC at home. Add them as [[hosts]] in the config file; /host shows and switches them.',
@@ -53,7 +60,7 @@ export const SETTINGS: Setting[] = [
 		description: 'Instruction files to look for, in order; the first one found is used. Comma-separated, e.g. JANE.md, AGENTS.md, CLAUDE.md',
 	},
 	{
-		key: 'prompt.file', section: 'Instructions', label: 'System prompt', type: 'string', allowEmpty: true,
+		key: 'prompt.file', section: 'Instructions', label: 'System prompt', type: 'string', allowEmpty: true, emptyLabel: '(built-in)',
 		description: 'A file that replaces Jane\'s built-in instructions (who she is, how she works). Empty uses the built-in ones. /prompt shows the full prompt; /prompt init makes a file to start from.',
 	},
 	{ key: 'ui.show_thinking', section: 'Display', label: 'Show thinking', type: 'enum', options: ['collapsed', 'full', 'hidden'], description: 'How to show the model\'s thinking: one line, all of it, or not at all.' },
@@ -159,7 +166,7 @@ export function parseInput(setting: Setting, text: string): { value: unknown } |
 /** How a value is shown in the menu, and pre-filled when editing. */
 export function formatValue(setting: Setting, value: unknown, forEditing = false): string {
 	if (setting.type === 'boolean') return value ? 'on' : 'off';
-	if (setting.type === 'string' && value === '' && !forEditing) return '(built-in)';
+	if (setting.type === 'string' && value === '' && !forEditing) return setting.emptyLabel ?? '(empty)';
 	if (setting.type === 'readonly' && (Array.isArray(value) || (typeof value === 'object' && value !== null))) {
 		const unit = setting.unit ?? 'item';
 		const count = Array.isArray(value) ? value.length : Object.keys(value).length;

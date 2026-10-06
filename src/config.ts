@@ -53,6 +53,10 @@ export type Config = {
 	};
 	/** Other machines to use instead of [model] when they're reachable, in order of preference. */
 	hosts: HostConfig[];
+	startup: {
+		/** The host to try first ("local" is this computer). Empty: the first one in the list that answers. */
+		host: string;
+	};
 	/** Commands Jane runs at certain moments. From the user config and, once allowed, the project's. */
 	hooks: Hook[];
 	/** MCP servers by name. From the user config and, once allowed, the project's. */
@@ -113,6 +117,9 @@ export const defaultConfig: Config = {
 		at_percent: 80,
 	},
 	hosts: [],
+	startup: {
+		host: '',
+	},
 	hooks: [],
 	mcp: {},
 	web: {
@@ -311,6 +318,11 @@ function validate(config: Config, warnings: string[]): void {
 	if (config.web.search_url && !/^https?:\/\/\S+$/.test(config.web.search_url)) {
 		warnings.push('web.search_url must start with http:// or https://');
 		config.web.search_url = '';
+	}
+	const hostNames = ['local', ...config.hosts.map((h) => h.name)];
+	if (config.startup.host && !hostNames.includes(config.startup.host)) {
+		warnings.push(`startup.host is "${config.startup.host}", but the hosts are ${hostNames.map((n) => `"${n}"`).join(', ')}`);
+		config.startup.host = '';
 	}
 	if (config.instructions.filenames.length === 0) {
 		config.instructions.filenames = defaultConfig.instructions.filenames;

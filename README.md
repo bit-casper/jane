@@ -95,6 +95,11 @@ api_key = "…"                 # the key the server was started with (--api-key
   and uses the first one in the list that answers; the status line shows which
   (`remote · model · 12k / 128k`). A host that's down or has the wrong API key
   is mentioned and skipped.
+- To start on a particular host instead, set it as the default, in
+  `/settings` (*Default host*) or the config: `[startup] host = "local"` for
+  this computer, or one of your hosts' names. The others then come after it,
+  for falling back and for helpers. The laptop first is a good choice when it
+  answers faster than the bigger machine; helpers then go to the other host.
 - If the host in use stops answering, even in the middle of a reply, Jane
   says so, switches to the next host that answers, and sends the request
   again. A smaller context on the new host is handled by compaction.
@@ -403,7 +408,10 @@ extra_dirs = []               # more folders with skills in them
 auto = true                   # summarise automatically when the context fills up
 at_percent = 80               # how full (10–95%) before compacting
 
-[[hosts]]                     # other machines, tried first in this order (see above)
+[startup]
+host = ""                     # host to try first ("local" = this computer); empty = first that answers
+
+[[hosts]]                     # other machines, tried in this order (see Other machines)
 name = "remote"
 base_url = "http://192.168.86.42:8080/v1"
 model = "qwen3.6-abliterated-q4"
