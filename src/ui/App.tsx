@@ -41,6 +41,7 @@ import { ResumePicker } from './ResumePicker.js';
 import { SettingsMenu } from './SettingsMenu.js';
 import { TrustPrompt } from './TrustPrompt.js';
 import { UndoPicker } from './UndoPicker.js';
+import { fitToRows, rowsFor } from './fit.js';
 import { renderMarkdown } from './markdown.js';
 import { ThemeContext, useColors } from './theme.js';
 
@@ -165,6 +166,11 @@ function itemsFromMessages(messages: ChatMessage[], displays: Map<string, ToolDi
 		}
 	}
 	return items;
+}
+
+/** Terminal rows a block of text takes at `width` columns, counting wrapped lines. */
+function rowsOf(text: string, width: number): number {
+	return text.split('\n').reduce((n, line) => n + rowsFor(line, width), 0);
 }
 
 function formatTokens(n: number): string {
@@ -1035,9 +1041,16 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 	}
 
 	// Keep the live (redrawn) part of the screen shorter than the terminal, or it flickers.
-	const liveRoom = Math.max(4, rows - 9);
+	// Keep the live (redrawn) part shorter than the terminal, counting wrapped lines as the rows they take;
+	// if it were taller, redrawing would leave copies of it in the scrollback.
+	// Reserved: spinner (1), input box (3), status line (1), margins (3).
+	const liveRoom = Math.max(4, rows - 8);
+	const showThinking = busy && Boolean(live.reasoning.trim()) && config.ui.show_thinking !== 'hidden';
+	const thinkingFull = showThinking && config.ui.show_thinking === 'full';
+	const thinkingText = thinkingFull ? fitToRows(live.reasoning.trim(), columns - 3, Math.min(8, Math.floor(liveRoom / 2))) : live.reasoning;
+	const thinkingRows = !showThinking ? 0 : thinkingFull ? 2 + rowsOf(thinkingText, columns - 3) : 1;
 	const liveText = live.content.trim()
-		? renderMarkdown(live.content, colors.assistant, colors.accent, columns - 2).split('\n').slice(-liveRoom).join('\n')
+		? fitToRows(renderMarkdown(live.content, colors.assistant, colors.accent, columns - 3), columns - 3, Math.max(2, liveRoom - thinkingRows - 1))
 		: '';
 	const seconds = Math.round((Date.now() - startedAt) / 1000);
 	const activity = compacting
@@ -1071,8 +1084,12 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 				}}
 			</Static>
 
+			{/* One column spare: symbols some terminals draw wider than expected can't push a line onto a second row,
+			    which would make each redraw leave a row behind in the scrollback. */}
+			<Box flexDirection="column" width={Math.max(20, columns - 1)}>
+
 			{busy && live.reasoning && (
-				<Thinking text={live.reasoning} mode={config.ui.show_thinking} live maxLines={Math.min(8, liveRoom)} />
+				<Thinking text={thinkingText} mode={config.ui.show_thinking} live />
 			)}
 			{busy && liveText && (
 				<Box marginBottom={1}>
@@ -1129,6 +1146,7 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 				placeholder={busy ? '' : 'Ask Jane anything · /help for commands'}
 			/>}
 			<StatusLine mode={mode} model={model} host={multiHost ? hostName : undefined} tokens={tokens} contextWindow={contextWindow} hint={hint} />
+			</Box>
 		</Box>
 	);
 }
