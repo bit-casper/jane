@@ -958,8 +958,7 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 	/** A helper's system prompt: like the main one, but with its own host and the helper instructions. */
 	function helperSystem(host: Host): string {
 		const listed = skillsPrompt(skillsRef.current);
-		const where = `# Where you run\n- You are the model ${host.model} on ${host.name === LOCAL_HOST ? 'this computer ("local")' : `the host "${host.name}"`}, ${Math.round(host.contextWindow / 1024)}k context.`;
-		return systemPrompt(cwd, instructionsRef.current, [where, ...(listed ? [listed] : []), HELPER_INSTRUCTIONS], promptBaseRef.current.text);
+		return systemPrompt(cwd, instructionsRef.current, [hostsPromptSection(hosts, host), ...(listed ? [listed] : []), HELPER_INSTRUCTIONS], promptBaseRef.current.text);
 	}
 
 	/** Jane's tools: the built-in ones, the skill tool if there are skills, and connected MCP servers' tools. */

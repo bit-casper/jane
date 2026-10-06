@@ -209,3 +209,14 @@ describe('telling the model where it runs', () => {
 		expect(hostsPromptSection(manager)).toBe('# Where you run\n- You are the model small on this computer ("local"), 64k context.\n- There are no other hosts.');
 	});
 });
+
+describe('telling a helper where it runs', () => {
+	it('describes the helper\'s own host and lists the others', async () => {
+		const { hostsPromptSection } = await import('../src/hosts.js');
+		const manager = new HostManager([host('home', { model: 'big' }), host('local', { model: 'small' })], async () => ({ ok: true, models: [] }));
+		await manager.start();
+		const section = hostsPromptSection(manager, manager.find('local')!);
+		expect(section).toMatch(/You are the model small on this computer \("local"\)/);
+		expect(section).toMatch(/  - home: big on the host "home"/);
+	});
+});
