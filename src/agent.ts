@@ -51,13 +51,17 @@ function estimateMessages(messages: ChatMessage[]): number {
 
 /** A user message without the notes Jane added in front of it. */
 export function stripNotes(content: string): string {
-	return content.replace(/^(?=\[Note from Jane: |\[Context from hooks\])(\[Note from Jane: [^\n]*\]\n)*(\[Context from hooks\]\n[\s\S]*?\n\[End of context from hooks\]\n)?\n/, '');
+	return content.replace(
+		/^(?=\[Note from Jane: |\[Context from hooks\]|\[Reports from helper agents\])(\[Note from Jane: [^\n]*\]\n)*(\[Context from hooks\]\n[\s\S]*?\n\[End of context from hooks\]\n)?(\[Reports from helper agents\]\n[\s\S]*?\n\[End of reports from helper agents\]\n)?\n/,
+		'',
+	);
 }
 
-/** What the user's message carries in front of it: Jane's notes, then context from hooks. */
-export function withNotes(prompt: string, notes: string[], context: string[] = []): string {
+/** What the user's message carries in front of it: Jane's notes, context from hooks, reports from background helpers. */
+export function withNotes(prompt: string, notes: string[], context: string[] = [], reports: string[] = []): string {
 	let head = notes.map((n) => `[Note from Jane: ${n}]\n`).join('');
 	if (context.length) head += `[Context from hooks]\n${context.join('\n\n')}\n[End of context from hooks]\n`;
+	if (reports.length) head += `[Reports from helper agents]\n${reports.join('\n\n')}\n[End of reports from helper agents]\n`;
 	return head ? `${head}\n${prompt}` : prompt;
 }
 
@@ -70,8 +74,8 @@ export type ToolHooks = {
 };
 
 export class Agent {
-	/** Tools the user said yes to for the rest of the session. */
-	readonly allowedForSession = new Set<string>();
+	/** Tools the user said yes to for the rest of the session (shared with helper agents). */
+	allowedForSession = new Set<string>();
 	/** The tools the model can use. */
 	tools: Tool<any>[] = tools;
 	/** Where file copies are kept for /undo. Undefined turns checkpoints off. */
@@ -166,6 +170,8 @@ export class Agent {
 	hooks?: ToolHooks;
 	/** Context from prompt_submit hooks, sent in front of the next user message. */
 	readonly hookContext: string[] = [];
+	/** Reports from background helpers that finished, sent in front of the next user message. */
+	readonly helperReports: string[] = [];
 
 	/** Called at the start of every turn, e.g. to pick up an edited system prompt. */
 	beforeTurn?: () => void;
@@ -174,7 +180,7 @@ export class Agent {
 	async run(prompt: string, events: AgentEvents, signal: AbortSignal): Promise<TurnOutcome> {
 		this.beforeTurn?.();
 		this.currentPrompt = prompt;
-		const content = withNotes(prompt, this.notes.splice(0), this.hookContext.splice(0));
+		const content = withNotes(prompt, this.notes.splice(0), this.hookContext.splice(0), this.helperReports.splice(0));
 		// Compact before adding the new prompt, so the prompt itself stays word for word.
 		if (this.needsCompacting(Math.ceil(content.length / 4))) {
 			await this.autoCompact(events, signal);
@@ -246,6 +252,13 @@ export class Agent {
 			if (reply.toolCalls.length === 0) return 'done';
 
 			let outcome: TurnOutcome | undefined;
+			// Several helpers asked for in one reply run at the same time.
+			if (reply.toolCalls.length > 1 && reply.toolCalls.every((c) => c.function.name === 'agent')) {
+				const results = await Promise.all(reply.toolCalls.map((call) => this.runCall(call, events, signal)));
+				reply.toolCalls.forEach((call, i) => this.push({ role: 'tool', tool_call_id: call.id, content: results[i]!.output }));
+				if (signal.aborted) return 'interrupted';
+				continue;
+			}
 			for (const call of reply.toolCalls) {
 				// Every tool call needs an answer, even if we stop early.
 				if (outcome || signal.aborted) {

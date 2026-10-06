@@ -12,6 +12,7 @@ import { compileBlockList } from '../blocklist.js';
 import { type Host, type HostManager, LOCAL_HOST, describeHost, hostsPromptSection, probe } from '../hosts.js';
 import { type Hook, type HookEvent, type HookPayload, type HookRun, blockMessage, fingerprint, hookProblem, isTrusted, isTrustedPrint, runHooks, shortCommand, trust, trustPrint } from '../hooks.js';
 import { McpManager, type McpServerConfig } from '../mcp.js';
+import { HELPER_INSTRUCTIONS, type Helper, Helpers, makeAgentTool, reportText, seconds as helperSeconds } from '../subagents.js';
 import { log } from '../log.js';
 import { watchOmarchyTheme } from '../omarchy.js';
 import { configDir, tildify } from '../paths.js';
@@ -81,6 +82,7 @@ const COMMANDS: Suggestion[] = [
 	{ name: 'undo', description: 'Undo file changes Jane made' },
 	{ name: 'compact', description: 'Summarise the conversation to free up context' },
 	{ name: 'host', description: 'Show or switch the machine Jane uses' },
+	{ name: 'agents', description: 'Helper agents: list, show a report, stop' },
 	{ name: 'hooks', description: 'List your hooks' },
 	{ name: 'mcp', description: 'MCP servers and their tools' },
 	{ name: 'help', description: 'Commands and keys' },
@@ -100,6 +102,7 @@ const HELP = `Commands
   /undo               Undo file changes Jane made
   /compact [focus]    Summarise the conversation to free up context
   /host [name]        Show the hosts, or switch to one
+  /agents [id]        Helper agents and their reports (/agents stop <id>)
   /hooks              List your hooks (/hooks allow turns on this project's)
   /mcp [name]         MCP servers and their tools (/mcp allow, /mcp restart <name>)
   /help               Show this help
@@ -112,6 +115,15 @@ Keys
   Esc                 Interrupt Jane
   Shift+Tab           Switch permission mode
   Ctrl+C              Clear the input, or press twice to quit`;
+
+type PendingPermission = {
+	key: string;
+	request: PermissionRequest;
+	/** Who asks: the main conversation, or a helper agent. */
+	owner: 'main' | 'helper';
+	helper?: Helper;
+	resolve(decision: PermissionDecision): void;
+};
 
 type TrustRequest = { kind: 'hooks'; hooks: Hook[] } | { kind: 'mcp'; servers: Record<string, McpServerConfig> };
 
@@ -231,7 +243,13 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 	const [busy, setBusy] = useState(false);
 	const [live, setLive] = useState<Live>({ reasoning: '', content: '' });
 	const [running, setRunning] = useState<{ id: string; name: string; label: string }[]>([]);
-	const [permission, setPermission] = useState<{ request: PermissionRequest; resolve(d: PermissionDecision): void } | null>(null);
+	/** Permission questions waiting for the user, one at a time: from the main conversation or a helper. */
+	const [permissions, setPermissions] = useState<PendingPermission[]>([]);
+	const permission = permissions[0] ?? null;
+	const askUser = (item: Omit<PendingPermission, 'key' | 'resolve'>) =>
+		new Promise<PermissionDecision>((resolve) => setPermissions((q) => [...q, { ...item, key: key(), resolve }]));
+	const helpersRef = useRef<Helpers | null>(null);
+	const [, setHelpersVersion] = useState(0);
 	const [hint, setHint] = useState<string>();
 	const [tick, setTick] = useState(0);
 	const [startedAt, setStartedAt] = useState(0);
@@ -406,6 +424,14 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 		});
 	}, [config, cwd]);
 
+	// While helpers run (also between turns), refresh their status lines every second.
+	const helpersRunning = helpersRef.current?.running().length ?? 0;
+	useEffect(() => {
+		if (!helpersRunning) return;
+		const timer = setInterval(() => setHelpersVersion((v) => v + 1), 1000);
+		return () => clearInterval(timer);
+	}, [helpersRunning]);
+
 	// While Jane works: move streamed text from the ref to the screen, and animate the spinner.
 	useEffect(() => {
 		if (!busy) return;
@@ -427,6 +453,7 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 	const quit = async () => {
 		const agent = agentRef.current;
 		onExit({ sessionId: agent?.session.id, started: Boolean(agent?.messages.length) });
+		helpersRef.current?.stopAll();
 		await fireHooks('session_end', {});
 		await mcpRef.current?.closeAll();
 		exit();
@@ -485,7 +512,7 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 			onNotice: info,
 			askPermission(request) {
 				void fireHooks('waiting', { tool: request.tool.name });
-				return new Promise((resolve) => setPermission({ request, resolve }));
+				return askUser({ request, owner: 'main' });
 			},
 		};
 		try {
@@ -500,7 +527,11 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 		} finally {
 			abortRef.current = null;
 			setRunning([]);
-			setPermission(null);
+			// Questions from this turn that are still open are moot now; helpers' questions stay.
+			setPermissions((q) => {
+				for (const p of q) if (p.owner === 'main') p.resolve({ kind: 'no' });
+				return q.filter((p) => p.owner !== 'main');
+			});
 			setCompacting(false);
 			setBusy(false);
 			if (recolorPendingRef.current) redrawHistory();
@@ -549,6 +580,32 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 			case 'help':
 				info(HELP);
 				return;
+			case 'agents': {
+				const all = helpersRef.current?.list ?? [];
+				const [sub = '', target = ''] = arg.split(/\s+/);
+				if (sub === 'stop') {
+					if (helpersRef.current?.stop(Number(target))) info(`Stopping helper #${target}…`);
+					else info(`There's no running helper #${target}.`, 'error');
+					return;
+				}
+				if (!all.length) {
+					info('No helpers yet. Jane starts them with her agent tool, e.g. when you ask her to research or review something in the background.');
+					return;
+				}
+				if (sub) {
+					const helper = all.find((h) => h.id === Number(sub));
+					if (!helper) return info(`There's no helper #${sub}.`, 'error');
+					const body = helper.state === 'running' ? `Still working: ${helper.activity || 'thinking'}` : reportText(helper);
+					info(`Helper #${helper.id} "${helper.name}"\nTask: ${helper.task}\n\n${body}\n\nIts full conversation: ${tildify(helper.agent.session.file)}`);
+					return;
+				}
+				const lines = all.map(
+					(h) =>
+						`  #${String(h.id).padEnd(3)} ${h.name.slice(0, 30).padEnd(31)} ${h.state.padEnd(8)} on ${h.host.name.padEnd(8)} ${String(h.toolCalls).padStart(3)} tool calls  ${helperSeconds(h)}s${h.background ? '  (background)' : ''}`,
+				);
+				info(`Helpers:\n${lines.join('\n')}\n\n/agents <id> shows a report, /agents stop <id> stops a running helper.`);
+				return;
+			}
 			case 'mcp': {
 				const manager = mcpRef.current;
 				const [sub = '', target = ''] = arg.split(/\s+/);
@@ -873,12 +930,45 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 		}
 	}
 
+	/** The helper agents (made once, the first time they're needed). */
+	function helpers(): Helpers {
+		if (!helpersRef.current) {
+			helpersRef.current = new Helpers(hosts, () => agentRef.current, helperSystem, {
+				changed: () => setHelpersVersion((v) => v + 1),
+				finished: (helper) => {
+					if (!helper.background) return;
+					agentRef.current?.helperReports.push(reportText(helper));
+					const preview = helper.report ? `\n${helper.report.split('\n').slice(0, 4).join('\n')}` : helper.error ? `\n${helper.error}` : '';
+					info(
+						`Helper "${helper.name}" (#${helper.id}) ${helper.state === 'done' ? 'finished' : helper.state === 'stopped' ? 'was stopped' : 'failed'} on ${helper.host.name} after ${helperSeconds(helper)}s. ` +
+							`Jane gets its report with your next message (/agents ${helper.id} shows it).${preview}`,
+						helper.state === 'failed' ? 'warning' : 'info',
+					);
+				},
+				askPermission: (helper, request) => {
+					void fireHooks('waiting', { tool: request.tool.name });
+					return askUser({ request, owner: 'helper', helper });
+				},
+				notice: info,
+			});
+		}
+		return helpersRef.current;
+	}
+
+	/** A helper's system prompt: like the main one, but with its own host and the helper instructions. */
+	function helperSystem(host: Host): string {
+		const listed = skillsPrompt(skillsRef.current);
+		const where = `# Where you run\n- You are the model ${host.model} on ${host.name === LOCAL_HOST ? 'this computer ("local")' : `the host "${host.name}"`}, ${Math.round(host.contextWindow / 1024)}k context.`;
+		return systemPrompt(cwd, instructionsRef.current, [where, ...(listed ? [listed] : []), HELPER_INSTRUCTIONS], promptBaseRef.current.text);
+	}
+
 	/** Jane's tools: the built-in ones, the skill tool if there are skills, and connected MCP servers' tools. */
 	function refreshTools() {
 		const agent = agentRef.current;
 		if (!agent) return;
 		agent.tools = [
 			...baseTools,
+			makeAgentTool(helpers()),
 			...webTools(webRef.current),
 			...(skillsRef.current.some((s) => !s.userOnly) ? [makeSkillTool(() => skillsRef.current)] : []),
 			...(mcpRef.current?.tools() ?? []),
@@ -1110,10 +1200,12 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 			)}
 			{permission && (
 				<PermissionPrompt
+					key={permission.key}
+					who={permission.helper ? `Helper "${permission.helper.name}" (#${permission.helper.id}, on ${permission.helper.host.name})` : undefined}
 					request={permission.request}
 					maxPreviewLines={Math.max(5, rows - 16)}
 					onDecide={(decision) => {
-						setPermission(null);
+						setPermissions((q) => q.slice(1));
 						permission.resolve(decision);
 					}}
 				/>
@@ -1145,6 +1237,14 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 			{undoList && agentRef.current?.checkpoints && (
 				<UndoPicker changes={undoList} checkpoints={agentRef.current.checkpoints} cwd={cwd} height={rows} onDone={undoFinished} />
 			)}
+			{(helpersRef.current?.running() ?? []).map((h) => (
+				<Box key={h.id} paddingX={1}>
+					<Text dimColor wrap="truncate-end">
+						↳ helper #{h.id} "{h.name}" on {h.host.name}
+						{h.background ? ' (background)' : ''} · {h.activity || 'thinking'} · {helperSeconds(h)}s
+					</Text>
+				</Box>
+			))}
 			{!permission && !panel && !undoList && !askTrust && <Input
 				value={input}
 				onChange={setInput}

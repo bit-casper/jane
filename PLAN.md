@@ -211,7 +211,7 @@ Next:
 10. ✅ **Hooks**: run your own scripts before or after tool calls and at session
    start and end
 11. ✅ **MCP servers**: use external tool servers
-12. **Sub-agents**: let Jane hand tasks to helper agents that work in the
+12. ✅ **Sub-agents**: let Jane hand tasks to helper agents that work in the
     background, each with its own conversation.
     - Run them on the other hosts: a background agent uses the first
       reachable host that isn't busy, and falls back to the laptop. A small
