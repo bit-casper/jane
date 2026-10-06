@@ -185,6 +185,13 @@ extra_dirs = []               # more folders with skills in them
 auto = true                   # summarise automatically when the context fills up
 at_percent = 80               # how full (10–95%) before compacting
 
+[[hosts]]                     # other machines, tried first in this order (see above)
+name = "home"
+base_url = "http://192.168.86.42:8080/v1"
+model = "qwen3.6-abliterated-q4"
+context_window = 131072
+api_key = ""
+
 [checkpoints]
 enabled = true                # save a copy before each write/edit, for /undo
 
