@@ -196,11 +196,13 @@ Next:
    - If the host in use stops answering mid-session, Jane says so and falls
      back to the next reachable one. If the conversation is too big for the
      smaller context, it's compacted first (needs item 7).
-   - Networking is set up outside Jane. On the home network it works
-     directly; away from home, something like Tailscale. The home server
-     should require an API key (`llama-server --api-key`).
-   - To decide: when the home PC comes back mid-session, switch back
-     automatically, or only say it's available?
+   - When a preferred host comes back mid-session, Jane only says it's
+     available; you switch with `/host`. It never switches back on its own,
+     so the model doesn't change halfway through a task.
+   - Scope: the home network. Jane only needs a URL. How it's reached (home
+     Wi-Fi, Tailscale, a VPN) is set up outside Jane and out of scope; the
+     README can mention it. The home server should require an API key
+     (`llama-server --api-key`).
 9. **Hooks**: run your own scripts before or after tool calls and at session
    start and end
 10. **MCP servers**: use external tool servers
