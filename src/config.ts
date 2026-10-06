@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import { parse } from 'smol-toml';
 import { HOOK_EVENTS, type Hook, type HookEvent } from './hooks.js';
+import type { McpServerConfig } from './mcp.js';
 import { readOmarchyColors } from './omarchy.js';
 import { DEFAULT_BLOCK_PATTERNS, compileBlockList } from './blocklist.js';
 import { projectConfigFile, userConfigFile } from './paths.js';
@@ -54,6 +55,8 @@ export type Config = {
 	hosts: HostConfig[];
 	/** Commands Jane runs at certain moments. From the user config and, once allowed, the project's. */
 	hooks: Hook[];
+	/** MCP servers by name. From the user config and, once allowed, the project's. */
+	mcp: Record<string, McpServerConfig>;
 	block_list: {
 		/** Refuse bash commands matching these patterns, in every permission mode. */
 		enabled: boolean;
@@ -104,6 +107,7 @@ export const defaultConfig: Config = {
 	},
 	hosts: [],
 	hooks: [],
+	mcp: {},
 	block_list: {
 		enabled: true,
 		patterns: DEFAULT_BLOCK_PATTERNS,
@@ -157,6 +161,57 @@ function merge(base: Plain, override: Plain, where: string, warnings: string[]):
 		}
 	}
 	return out;
+}
+
+/** Check [mcp.<name>] sections and add them to `into`; broken ones are skipped with a warning. */
+function parseMcp(value: unknown, source: McpServerConfig['source'], into: Record<string, McpServerConfig>, warnings: string[]): void {
+	if (!isPlain(value)) {
+		warnings.push('"mcp" should hold [mcp.<name>] sections');
+		return;
+	}
+	const strings = (v: unknown) => isPlain(v) && Object.values(v).every((x) => typeof x === 'string');
+	for (const [name, entry] of Object.entries(value)) {
+		const where = `mcp.${name}`;
+		if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
+			warnings.push(`${where} was skipped: server names can only use letters, digits, - and _`);
+			continue;
+		}
+		if (!isPlain(entry)) {
+			warnings.push(`${where} should be a table`);
+			continue;
+		}
+		if (into[name]) {
+			// A project can't replace one of your servers with its own command under the same name.
+			warnings.push(`${where} is already defined in your user config, so the project's one was skipped`);
+			continue;
+		}
+		const { command, url, env = {}, headers = {}, tools = [], enabled = true, timeout = 120 } = entry;
+		const problems: string[] = [];
+		const hasCommand = Array.isArray(command) && command.length > 0 && command.every((c) => typeof c === 'string');
+		const hasUrl = typeof url === 'string' && /^https?:\/\/\S+$/.test(url);
+		if (hasCommand === hasUrl) problems.push('either command (a list, e.g. ["npx", "some-server"]) or url (http://…), not both');
+		if (!strings(env)) problems.push('env (a table of strings)');
+		if (!strings(headers)) problems.push('headers (a table of strings)');
+		if (!Array.isArray(tools) || !tools.every((t) => typeof t === 'string')) problems.push('tools (a list of tool names)');
+		if (typeof enabled !== 'boolean') problems.push('enabled (true or false)');
+		if (typeof timeout !== 'number' || timeout <= 0) problems.push('timeout (seconds)');
+		for (const key of Object.keys(entry)) {
+			if (!['command', 'url', 'env', 'headers', 'tools', 'enabled', 'timeout'].includes(key)) warnings.push(`${where}: unknown setting "${key}"`);
+		}
+		if (problems.length) {
+			warnings.push(`${where} was skipped: it needs ${problems.join('; ')}`);
+			continue;
+		}
+		into[name] = {
+			...(hasCommand ? { command: command as string[] } : { url: url as string }),
+			env: env as Record<string, string>,
+			headers: headers as Record<string, string>,
+			tools: tools as string[],
+			enabled: enabled as boolean,
+			timeout: timeout as number,
+			source,
+		};
+	}
 }
 
 /** Check [[hooks]] entries; broken ones are skipped with a warning. */
@@ -268,6 +323,7 @@ export function loadConfig(
 	const setColors = new Set<string>();
 	let merged: Plain = structuredClone(defaultConfig) as unknown as Plain;
 	const hooks: Hook[] = [];
+	const mcp: Record<string, McpServerConfig> = {};
 	for (const [index, file] of files.entries()) {
 		let text: string;
 		try {
@@ -283,6 +339,10 @@ export function loadConfig(
 				hooks.push(...parseHooks(data['hooks'], index === 0 ? 'user' : 'project', fileWarnings));
 				delete data['hooks'];
 			}
+			if ('mcp' in data) {
+				parseMcp(data['mcp'], index === 0 ? 'user' : 'project', mcp, fileWarnings);
+				delete data['mcp'];
+			}
 			merged = merge(merged, data, '', fileWarnings);
 			const colors = isPlain(data['ui']) && isPlain(data['ui']['colors']) ? data['ui']['colors'] : {};
 			for (const key of Object.keys(colors)) setColors.add(key);
@@ -293,6 +353,7 @@ export function loadConfig(
 	}
 	const config = merged as unknown as Config;
 	config.hooks = hooks;
+	config.mcp = mcp;
 	validate(config, warnings);
 	const themed: LoadedConfig['themed'] = [];
 	if (config.ui.theme === 'omarchy') {

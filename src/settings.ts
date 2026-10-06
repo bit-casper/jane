@@ -73,6 +73,10 @@ export const SETTINGS: Setting[] = [
 		key: 'hooks', section: 'Safety', label: 'Hooks', type: 'readonly', unit: 'hook', noReset: true,
 		description: 'Commands Jane runs at certain moments (after an edit, before a tool, when she\'s done…). Add them as [[hooks]] in the config file; /hooks lists them.',
 	},
+	{
+		key: 'mcp', section: 'Safety', label: 'MCP servers', type: 'readonly', unit: 'server', noReset: true,
+		description: 'Programs that give Jane more tools, like a browser. Add them as [mcp.<name>] in the config file; /mcp shows them and their tools.',
+	},
 	{ key: 'checkpoints.enabled', section: 'Safety', label: 'Undo copies', type: 'boolean', description: 'Save a copy of each file before Jane writes or edits it, so /undo can put it back.' },
 	{ key: 'block_list.enabled', section: 'Safety', label: 'Block list', type: 'boolean', description: 'Refuse dangerous bash commands (rm -rf ~, mkfs, dd onto a disk…) in every permission mode.' },
 	{ key: 'block_list.patterns', section: 'Safety', label: 'Block patterns', type: 'readonly', unit: 'pattern', description: 'The regular expressions for blocked commands. Edit them in the config file; r resets them to the built-in list.' },
@@ -153,9 +157,10 @@ export function parseInput(setting: Setting, text: string): { value: unknown } |
 export function formatValue(setting: Setting, value: unknown, forEditing = false): string {
 	if (setting.type === 'boolean') return value ? 'on' : 'off';
 	if (setting.type === 'string' && value === '' && !forEditing) return '(built-in)';
-	if (setting.type === 'readonly' && Array.isArray(value)) {
+	if (setting.type === 'readonly' && (Array.isArray(value) || (typeof value === 'object' && value !== null))) {
 		const unit = setting.unit ?? 'item';
-		return value.length === 0 ? 'none' : `${value.length} ${unit}${value.length === 1 ? '' : 's'}`;
+		const count = Array.isArray(value) ? value.length : Object.keys(value).length;
+		return count === 0 ? 'none' : `${count} ${unit}${count === 1 ? '' : 's'}`;
 	}
 	if (setting.type === 'list') return (value as string[]).join(', ') || (forEditing ? '' : '(none)');
 	if (setting.type === 'secret' && !forEditing) return value ? '•'.repeat(8) : '(none)';

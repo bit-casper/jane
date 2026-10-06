@@ -1,10 +1,21 @@
 import { Box, Text, useInput } from 'ink';
 import { useState } from 'react';
-import type { Hook } from '../hooks.js';
 import { useColors } from './theme.js';
 
-/** Ask before running hooks that a project's own config defines. */
-export function TrustHooksPrompt({ hooks, project, onDecide }: { hooks: Hook[]; project: string; onDecide(allow: boolean): void }) {
+/** Ask before running what a project's own config defines (hooks, MCP servers). */
+export function TrustPrompt({
+	title,
+	project,
+	lines,
+	onDecide,
+}: {
+	/** e.g. "This project wants to run its own hooks" */
+	title: string;
+	project: string;
+	/** One line per thing it wants to run: a label and the command. */
+	lines: { label: string; command: string }[];
+	onDecide(allow: boolean): void;
+}) {
 	const colors = useColors();
 	const [selected, setSelected] = useState(1);
 	const options = ['Allow them in this project', 'Not now (ask again next time)'];
@@ -19,17 +30,16 @@ export function TrustHooksPrompt({ hooks, project, onDecide }: { hooks: Hook[]; 
 	return (
 		<Box flexDirection="column" borderStyle="round" borderColor="yellow" paddingX={1} marginBottom={1}>
 			<Text bold color="yellow">
-				This project wants to run its own hooks
+				{title}
 			</Text>
 			<Text dimColor>
-				{project}/.jane/config.toml defines commands that Jane would run on your computer. Only allow them if you trust this project.
+				{project}/.jane/config.toml defines programs that Jane would run on your computer. Only allow them if you trust this project.
 			</Text>
 			<Box flexDirection="column" marginY={1}>
-				{hooks.map((hook, i) => (
+				{lines.map((line, i) => (
 					<Text key={i}>
-						<Text color={colors.accent}>{hook.event.padEnd(14)}</Text>
-						{hook.tools.length ? <Text dimColor>[{hook.tools.join(', ')}] </Text> : null}
-						{hook.command}
+						<Text color={colors.accent}>{line.label.padEnd(14)}</Text>
+						{line.command}
 					</Text>
 				))}
 			</Box>
@@ -39,7 +49,7 @@ export function TrustHooksPrompt({ hooks, project, onDecide }: { hooks: Hook[]; 
 					{i + 1}. {option}
 				</Text>
 			))}
-			<Text dimColor>If these hooks change later, Jane asks again.</Text>
+			<Text dimColor>If they change later, Jane asks again.</Text>
 		</Box>
 	);
 }

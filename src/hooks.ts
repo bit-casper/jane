@@ -138,14 +138,24 @@ export function shortCommand(command: string): string {
 	return one.length > 60 ? one.slice(0, 59) + '…' : one;
 }
 
-// --- Trusting a project's hooks ---------------------------------------------
+// --- Trusting what a project's config wants to run ----------------------------
 
 const trustFile = () => path.join(dataDir, 'trusted-hooks.json');
 
-/** A fingerprint of a project's hooks: if they change, Jane asks again. */
+/** What a project can define that runs programs on the user's computer. */
+export type TrustKind = 'hooks' | 'mcp';
+
+/** A fingerprint of what a project wants to run: if it changes, Jane asks again. */
+export function fingerprint(value: unknown): string {
+	return crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
+}
+
 export function hooksFingerprint(hooks: Hook[]): string {
-	const plain = hooks.map(({ event, command, tools, timeout }) => ({ event, command, tools, timeout }));
-	return crypto.createHash('sha256').update(JSON.stringify(plain)).digest('hex');
+	return fingerprint(hooks.map(({ event, command, tools, timeout }) => ({ event, command, tools, timeout })));
+}
+
+function trustKey(cwd: string, kind: TrustKind): string {
+	return kind === 'hooks' ? path.resolve(cwd) : `${path.resolve(cwd)} (${kind})`;
 }
 
 function readTrust(file: string): Record<string, string> {
@@ -158,13 +168,22 @@ function readTrust(file: string): Record<string, string> {
 
 /** Has the user allowed exactly these hooks in this project? */
 export function isTrusted(cwd: string, hooks: Hook[], file = trustFile()): boolean {
-	return readTrust(file)[path.resolve(cwd)] === hooksFingerprint(hooks);
+	return isTrustedPrint(cwd, 'hooks', hooksFingerprint(hooks), file);
 }
 
 /** Remember that the user allowed these hooks in this project. */
 export function trust(cwd: string, hooks: Hook[], file = trustFile()): void {
+	trustPrint(cwd, 'hooks', hooksFingerprint(hooks), file);
+}
+
+/** Has the user allowed exactly this (by fingerprint) in this project? */
+export function isTrustedPrint(cwd: string, kind: TrustKind, print: string, file = trustFile()): boolean {
+	return readTrust(file)[trustKey(cwd, kind)] === print;
+}
+
+export function trustPrint(cwd: string, kind: TrustKind, print: string, file = trustFile()): void {
 	const all = readTrust(file);
-	all[path.resolve(cwd)] = hooksFingerprint(hooks);
+	all[trustKey(cwd, kind)] = print;
 	fs.mkdirSync(path.dirname(file), { recursive: true });
 	fs.writeFileSync(file, JSON.stringify(all, null, 2) + '\n');
 }
