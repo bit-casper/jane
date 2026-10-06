@@ -144,3 +144,34 @@ export class HostManager {
 		return undefined;
 	}
 }
+
+/** Where an address points, without the /v1 path: "192.168.86.24:8080". */
+function hostAddress(url: string): string {
+	try {
+		return new URL(url).host;
+	} catch {
+		return url;
+	}
+}
+
+/**
+ * The part of the system prompt that tells the model which model it is, which
+ * machine it runs on, and which other machines Jane can use.
+ */
+export function hostsPromptSection(manager: HostManager): string {
+	const describe = (h: Host) =>
+		`${h.model} on ${h.name === LOCAL_HOST ? 'this computer ("local")' : `the host "${h.name}" (${hostAddress(h.baseUrl)})`}, ${Math.round(h.contextWindow / 1024)}k context`;
+	const lines = ['# Where you run', `- You are the model ${describe(manager.current)}.`];
+	const others = manager.hosts.filter((h) => h !== manager.current);
+	if (others.length) {
+		lines.push('- Other hosts Jane can use (the user switches with /host):');
+		for (const h of others) {
+			const status = manager.status.get(h.name);
+			const state = !status ? '' : status.ok ? ' (reachable at the last check)' : ` (not reachable at the last check: ${status.reason})`;
+			lines.push(`  - ${h.name}: ${describe(h)}${state}`);
+		}
+	} else {
+		lines.push('- There are no other hosts.');
+	}
+	return lines.join('\n');
+}

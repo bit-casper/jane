@@ -9,7 +9,7 @@ import { type InstructionFile, loadInstructions } from '../instructions.js';
 import { type Change, Checkpoints } from '../checkpoints.js';
 import { isSummary } from '../compact.js';
 import { compileBlockList } from '../blocklist.js';
-import { type Host, type HostManager, LOCAL_HOST, describeHost, probe } from '../hosts.js';
+import { type Host, type HostManager, LOCAL_HOST, describeHost, hostsPromptSection, probe } from '../hosts.js';
 import { type Hook, type HookEvent, type HookPayload, type HookRun, blockMessage, fingerprint, hookProblem, isTrusted, isTrustedPrint, runHooks, shortCommand, trust, trustPrint } from '../hooks.js';
 import { McpManager, type McpServerConfig } from '../mcp.js';
 import { log } from '../log.js';
@@ -293,7 +293,7 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 			const agent = new Agent(
 				{ baseUrl: host.baseUrl, apiKey: host.apiKey, model: host.model },
 				startMode,
-				systemPrompt(cwd, instructions, listed ? [listed] : [], promptBaseRef.current.text),
+				systemPrompt(cwd, instructions, [hostsPromptSection(hosts), ...(listed ? [listed] : [])], promptBaseRef.current.text),
 				cwd,
 				session,
 				messages,
@@ -617,6 +617,7 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 			case 'host': {
 				if (!arg) {
 					await hosts.checkAll();
+					rebuildSystem();
 					const lines = hosts.hosts.map((h) => {
 						const status = hosts.status.get(h.name);
 						const state = h === hosts.current ? 'in use' : status?.ok ? 'reachable' : `not reachable: ${status && !status.ok ? status.reason : 'unknown'}`;
@@ -676,6 +677,7 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 					agent.settings.model = arg;
 					agent.session.setModel(arg);
 					hosts.current.model = arg;
+					rebuildSystem();
 					setModel(arg);
 					info(`Model: ${arg}`);
 					return;
@@ -888,7 +890,7 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 		const agent = agentRef.current;
 		if (!agent) return;
 		const listed = skillsPrompt(skillsRef.current);
-		agent.system = systemPrompt(cwd, instructionsRef.current, listed ? [listed] : [], promptBaseRef.current.text);
+		agent.system = systemPrompt(cwd, instructionsRef.current, [hostsPromptSection(hosts), ...(listed ? [listed] : [])], promptBaseRef.current.text);
 	}
 
 	/** Read the custom prompt file again (or go back to the built-in prompt) and say what's in use. */
@@ -903,8 +905,13 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 
 	/** Point the agent at a host: its address, key, model and context size. */
 	function useHost(host: Host) {
+		const previous = hosts.current;
 		hosts.current = host;
 		const agent = agentRef.current;
+		// Mid-conversation, the history may say otherwise ("I'm running on home"), so say it plainly.
+		if (agent && previous !== host && agent.messages.length) {
+			agent.notes.push(`This conversation moved from host "${previous.name}" to host "${host.name}": you are now ${host.model} with a ${Math.round(host.contextWindow / 1024)}k context.`);
+		}
 		if (agent) {
 			agent.settings = { baseUrl: host.baseUrl, apiKey: host.apiKey, model: host.model };
 			agent.contextWindow = host.contextWindow;
@@ -913,6 +920,8 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 		setModel(host.model);
 		setHostName(host.name);
 		setContextWindow(host.contextWindow);
+		// Tell the model about the switch too.
+		rebuildSystem();
 	}
 
 	/** The host stopped answering: switch to the next one that does (called by the agent). */
