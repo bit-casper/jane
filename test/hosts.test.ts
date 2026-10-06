@@ -220,3 +220,34 @@ describe('telling a helper where it runs', () => {
 		expect(section).toMatch(/  - home: big on the host "home"/);
 	});
 });
+
+describe('the default host', () => {
+	const configWith = (startupHost: string) => {
+		const file = path.join(dir, 'd.toml');
+		fs.writeFileSync(file, `[startup]\nhost = "${startupHost}"\n\n[[hosts]]\nname = "remote"\nbase_url = "http://192.168.86.24:8080/v1"\nmodel = "big"\n`);
+		return loadConfig(dir, [file], () => undefined);
+	};
+
+	it('goes first in the list; the others keep their order', () => {
+		expect(hostsFromConfig(configWith('local').config).map((h) => h.name)).toEqual(['local', 'remote']);
+		expect(hostsFromConfig(configWith('remote').config).map((h) => h.name)).toEqual(['remote', 'local']);
+		expect(hostsFromConfig(configWith('').config).map((h) => h.name)).toEqual(['remote', 'local']);
+	});
+
+	it('is where Jane starts, with the others as fallback, and no "reachable again" for them', async () => {
+		const up = { local: true, remote: true };
+		const manager = new HostManager(hostsFromConfig(configWith('local').config), async (h) =>
+			up[h.name as 'local'] ? { ok: true, models: [] } : { ok: false, reason: 'not reachable' },
+		);
+		expect((await manager.start()).host.name).toBe('local');
+		expect(await manager.preferredAvailable()).toBeUndefined();
+		up.local = false;
+		expect((await manager.start()).host.name).toBe('remote');
+	});
+
+	it('warns about a name that is not one of the hosts', () => {
+		const { config, warnings } = configWith('home');
+		expect(config.startup.host).toBe('');
+		expect(warnings).toEqual([expect.stringMatching(/startup\.host is "home", but the hosts are "local", "remote"/)]);
+	});
+});

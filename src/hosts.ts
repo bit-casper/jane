@@ -31,7 +31,11 @@ export function hostsFromConfig(config: Config): Host[] {
 		contextWindow: config.model.context_window,
 		apiKey: config.model.api_key || undefined,
 	};
-	return [...remote, local];
+	// The default host (startup.host) goes first; the rest keep their order. Everything that walks the
+	// list (startup, fallback, "reachable again", /host) then agrees on it.
+	const all = [...remote, local];
+	const preferred = all.find((h) => h.name === config.startup.host);
+	return preferred ? [preferred, ...all.filter((h) => h !== preferred)] : all;
 }
 
 /** Ask a host which models it serves, to see whether it's up and the key is right. */
