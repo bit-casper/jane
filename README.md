@@ -52,7 +52,7 @@ jane --mode unrestricted
 | Shift+Tab | Switch permission mode |
 | Ctrl+C | Clear the input, or press twice to quit |
 
-Commands: `/clear`, `/model [name]`, `/permissions [mode]`, `/settings`, `/help`, `/exit`.
+Commands: `/clear`, `/model [name]`, `/permissions [mode]`, `/settings`, `/skills`, `/<skill> [request]`, `/help`, `/exit`.
 
 ### Permission modes
 
@@ -66,6 +66,31 @@ Commands: `/clear`, `/model [name]`, `/permissions [mode]`, `/settings`, `/help`
 Put instructions for Jane in a `JANE.md` file in your project, and/or in
 `~/.config/jane/JANE.md` for every project. The file names are configurable,
 so Jane can also read `AGENTS.md` or `CLAUDE.md`.
+
+### Skills
+
+Skills are folders with a `SKILL.md`: a short YAML header (`name`,
+`description`) and Markdown instructions. It's the same format as Claude Code
+skills, so existing skills work in Jane as they are.
+
+Jane lists each skill's name and description for the model, and the model loads
+a skill's full instructions with its `skill` tool when a task matches. You can
+also run one yourself with `/<skill-name> [request]`, and see them all with
+`/skills`. A skill with `disable-model-invocation: true` only runs when you type
+it.
+
+Jane looks in these folders; when two skills share a name, the first wins:
+
+| Folder | Source |
+|---|---|
+| `<project>/.jane/skills/` | `jane` |
+| `<project>/.claude/skills/` | `claude` |
+| `~/.config/jane/skills/` | `jane` |
+| `~/.claude/skills/` | `claude` |
+| `/usr/share/omarchy/default/agents/skills/` | `omarchy` |
+| anything in `skills.extra_dirs` | |
+
+Turn sources on or off with `skills.sources`.
 
 ## Configuration
 
@@ -89,6 +114,10 @@ default_mode = "always-ask"   # or "unrestricted"
 
 [instructions]
 filenames = ["JANE.md"]       # first one found wins, e.g. ["JANE.md", "AGENTS.md"]
+
+[skills]
+sources = ["jane", "claude", "omarchy"]
+extra_dirs = []               # more folders with skills in them
 
 [ui]
 show_thinking = "collapsed"   # "full" | "collapsed" | "hidden"

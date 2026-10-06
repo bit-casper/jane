@@ -20,6 +20,12 @@ export type Config = {
 	instructions: {
 		filenames: string[];
 	};
+	skills: {
+		/** Which kinds of skill folders to load: "jane", "claude", "omarchy". */
+		sources: string[];
+		/** More folders with skills in them. */
+		extra_dirs: string[];
+	};
 	ui: {
 		show_thinking: ThinkingDisplay;
 		/** Where colours come from when the config doesn't set them. */
@@ -47,6 +53,10 @@ export const defaultConfig: Config = {
 	},
 	instructions: {
 		filenames: ['JANE.md'],
+	},
+	skills: {
+		sources: ['jane', 'claude', 'omarchy'],
+		extra_dirs: [],
 	},
 	ui: {
 		show_thinking: 'collapsed',
@@ -109,6 +119,11 @@ function validate(config: Config, warnings: string[]): void {
 	if (!['omarchy', 'none'].includes(config.ui.theme)) {
 		warnings.push(`ui.theme must be "omarchy" or "none"`);
 		config.ui.theme = defaultConfig.ui.theme;
+	}
+	const unknownSources = config.skills.sources.filter((s) => !['jane', 'claude', 'omarchy'].includes(s));
+	if (unknownSources.length) {
+		warnings.push(`skills.sources can only contain "jane", "claude" and "omarchy" (not ${unknownSources.map((s) => `"${s}"`).join(', ')})`);
+		config.skills.sources = config.skills.sources.filter((s) => !unknownSources.includes(s));
 	}
 	if (config.instructions.filenames.length === 0) {
 		config.instructions.filenames = defaultConfig.instructions.filenames;

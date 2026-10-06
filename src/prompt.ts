@@ -14,7 +14,7 @@ function isGitRepo(cwd: string): boolean {
 	}
 }
 
-export function systemPrompt(cwd: string, instructions: InstructionFile[], now = new Date()): string {
+export function systemPrompt(cwd: string, instructions: InstructionFile[], sections: string[] = [], now = new Date()): string {
 	const parts = [
 		`You are Jane, a coding agent running in the user's terminal. You help with software tasks: reading and changing code, running commands, finding and fixing problems.`,
 		`# How to work
@@ -33,6 +33,7 @@ export function systemPrompt(cwd: string, instructions: InstructionFile[], now =
 - Home directory: ${os.homedir()}
 - Today's date: ${now.toISOString().slice(0, 10)}`,
 	];
+	parts.push(...sections);
 	for (const file of instructions) {
 		parts.push(`# Instructions from ${tildify(file.path)}\n\n${file.content}`);
 	}

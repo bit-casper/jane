@@ -10,7 +10,9 @@ import { watchOmarchyTheme } from '../omarchy.js';
 import { tildify } from '../paths.js';
 import { systemPrompt } from '../prompt.js';
 import { type SessionSummary, Session, type ToolDisplayRecord, loadSession } from '../session.js';
-import { findTool, parseArgs } from '../tools/index.js';
+import { type Skill, discoverSkills, skillContent, skillDirs, skillMessage, skillsPrompt, typedText } from '../skills.js';
+import { findTool, parseArgs, tools as baseTools } from '../tools/index.js';
+import { makeSkillTool } from '../tools/skill.js';
 import { Banner } from './Banner.js';
 import * as ed from './editor.js';
 import {
@@ -56,6 +58,7 @@ const COMMANDS: Suggestion[] = [
 	{ name: 'model', description: 'Show or change the model' },
 	{ name: 'permissions', description: 'Switch permission mode' },
 	{ name: 'settings', description: 'Change Jane\'s settings' },
+	{ name: 'skills', description: 'List the skills Jane can use' },
 	{ name: 'help', description: 'Commands and keys' },
 	{ name: 'exit', description: 'Quit Jane' },
 ];
@@ -65,6 +68,8 @@ const HELP = `Commands
   /model [name]       Show the available models, or switch to one
   /permissions [mode] Switch between always-ask and unrestricted
   /settings           Change settings (saved to your user or project config)
+  /skills             List the skills Jane can use
+  /<skill> [request]  Run a skill, e.g. /omarchy change the gaps
   /help               Show this help
   /exit               Quit
 
@@ -85,7 +90,7 @@ function itemsFromMessages(messages: ChatMessage[], displays: Map<string, ToolDi
 	const results = new Map<string, string>();
 	for (const m of messages) if (m.role === 'tool') results.set(m.tool_call_id, m.content);
 	for (const m of messages) {
-		if (m.role === 'user') items.push({ key: key(), kind: 'user', text: m.content });
+		if (m.role === 'user') items.push({ key: key(), kind: 'user', text: typedText(m.content) });
 		else if (m.role === 'assistant') {
 			if (m.content?.trim()) items.push({ key: key(), kind: 'assistant', text: m.content });
 			for (const call of m.tool_calls ?? []) {
@@ -184,6 +189,7 @@ function Main({ config, setConfig, overrides, warnings, version, cwd, start, cle
 	const busyRef = useRef(false);
 	const recolorPendingRef = useRef(false);
 	busyRef.current = busy;
+	const skillsRef = useRef<Skill[]>([]);
 
 	const push = useCallback((...more: HistoryItem[]) => setItems((prev) => [...prev, ...more]), []);
 	const info = useCallback((text: string, tone: 'info' | 'warning' | 'error' = 'info') => push({ key: key(), kind: 'info', text, tone }), [push]);
@@ -193,6 +199,9 @@ function Main({ config, setConfig, overrides, warnings, version, cwd, start, cle
 		(resume?: SessionSummary) => {
 			const instructions = loadInstructions(cwd, config.instructions.filenames);
 			instructionsRef.current = instructions;
+			const found = discoverSkills(skillDirs(cwd, config.skills.sources, config.skills.extra_dirs));
+			skillsRef.current = found.skills;
+			const listed = skillsPrompt(found.skills);
 			let messages: ChatMessage[] = [];
 			let displays = new Map<string, ToolDisplayRecord>();
 			let restoredMode: PermissionMode | undefined;
@@ -207,21 +216,26 @@ function Main({ config, setConfig, overrides, warnings, version, cwd, start, cle
 			const agent = new Agent(
 				{ baseUrl: config.model.base_url, apiKey: config.model.api_key || undefined, model: agentRef.current?.settings.model ?? config.model.name },
 				startMode,
-				systemPrompt(cwd, instructions),
+				systemPrompt(cwd, instructions, listed ? [listed] : []),
 				cwd,
 				session,
 				messages,
 			);
+			if (found.skills.some((s) => !s.userOnly)) agent.tools = [...baseTools, makeSkillTool(() => skillsRef.current)];
 			agentRef.current = agent;
 			setModeState(startMode);
 			setModel(agent.settings.model);
-			setTokens(estimateTokens(messages) + Math.ceil(agent.system.length / 4));
-			setPromptHistory(messages.flatMap((m) => (m.role === 'user' ? [m.content] : [])));
+			setTokens(estimateTokens(messages, agent.tools) + Math.ceil(agent.system.length / 4));
+			setPromptHistory(messages.flatMap((m) => (m.role === 'user' ? [typedText(m.content)] : [])));
 
 			const head: HistoryItem[] = [{ key: key(), kind: 'banner' }];
 			for (const w of warnings) head.push({ key: key(), kind: 'info', text: `Config: ${w}`, tone: 'warning' });
 			if (instructions.length) {
 				head.push({ key: key(), kind: 'info', text: `Loaded ${instructions.map((f) => (path.dirname(f.path) === cwd ? path.basename(f.path) : tildify(f.path))).join(', ')}` });
+			}
+			for (const w of found.warnings) head.push({ key: key(), kind: 'info', text: `Skills: ${w}`, tone: 'warning' });
+			if (found.skills.length) {
+				head.push({ key: key(), kind: 'info', text: `Skills: ${found.skills.map((s) => s.name).join(', ')}` });
 			}
 			if (resume) {
 				head.push(...itemsFromMessages(messages, displays, cwd));
@@ -395,8 +409,32 @@ function Main({ config, setConfig, overrides, warnings, version, cwd, start, cle
 				}
 				return;
 			}
-			default:
+			case 'skills': {
+				const skills = skillsRef.current;
+				if (skills.length === 0) {
+					info(`No skills found. Jane looks in: ${skillDirs(cwd, config.skills.sources, config.skills.extra_dirs).map((d) => tildify(d.dir)).join(', ')}`);
+					return;
+				}
+				const where = (dir: string) => (dir.startsWith(cwd + path.sep) ? path.relative(cwd, dir) : tildify(dir));
+				const lines = skills.map((s) => `  /${s.name.padEnd(18)} ${s.source}${s.userOnly ? ', only when you run it' : ''} · ${where(s.dir)}`);
+				info(`Skills\n${lines.join('\n')}\n\nJane picks a skill when a task matches it, or run one with /<name> [request].`);
+				return;
+			}
+			default: {
+				const skill = skillsRef.current.find((s) => s.name === name);
+				if (skill) {
+					let content: string;
+					try {
+						content = skillContent(skill);
+					} catch (error) {
+						info(`Could not read ${skill.file}: ${(error as Error).message}`, 'error');
+						return;
+					}
+					void runPrompt(skillMessage(skill, content, arg));
+					return;
+				}
 				info(`Unknown command /${name}. Type /help to see the commands.`, 'error');
+			}
 		}
 	};
 
@@ -404,7 +442,9 @@ function Main({ config, setConfig, overrides, warnings, version, cwd, start, cle
 		setInput(ed.empty);
 		const trimmed = text.trim();
 		setPromptHistory((h) => (h.at(-1) === text ? h : [...h, text]));
-		if (/^\/[a-z]+(\s|$)/.test(trimmed)) {
+		const command = /^\/([\w.:-]+)(\s|$)/.exec(trimmed)?.[1];
+		// Only known commands and skills; anything else (like a path) is a normal prompt.
+		if (command && (COMMANDS.some((c) => c.name === command) || ['quit'].includes(command) || skillsRef.current.some((s) => s.name === command))) {
 			push({ key: key(), kind: 'user', text: trimmed });
 			void runCommand(trimmed);
 			return;
@@ -430,7 +470,8 @@ function Main({ config, setConfig, overrides, warnings, version, cwd, start, cle
 			if (key === 'instructions.filenames') {
 				const instructions = loadInstructions(cwd, next.instructions.filenames);
 				instructionsRef.current = instructions;
-				agent.system = systemPrompt(cwd, instructions);
+				const listed = skillsPrompt(skillsRef.current);
+				agent.system = systemPrompt(cwd, instructions, listed ? [listed] : []);
 				info(
 					instructions.length
 						? `Now using ${instructions.map((f) => (path.dirname(f.path) === cwd ? path.basename(f.path) : tildify(f.path))).join(', ')}`
@@ -467,9 +508,10 @@ function Main({ config, setConfig, overrides, warnings, version, cwd, start, cle
 	});
 
 	const suggestions = useMemo(() => {
-		const m = /^\/([a-z]*)$/.exec(input.text);
+		const m = /^\/([\w.:-]*)$/.exec(input.text);
 		if (!m) return [];
-		return COMMANDS.filter((c) => c.name.startsWith(m[1]!));
+		const skills = skillsRef.current.map((s) => ({ name: s.name, description: s.description.length > 70 ? s.description.slice(0, 69) + '…' : s.description }));
+		return [...COMMANDS, ...skills].filter((c) => c.name.startsWith(m[1]!)).slice(0, 8);
 	}, [input.text]);
 
 	if (phase === 'pick' && start.kind === 'pick') {

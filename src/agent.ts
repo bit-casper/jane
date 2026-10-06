@@ -26,8 +26,8 @@ export type TurnOutcome = 'done' | 'interrupted' | 'denied' | 'too-many-bad-call
 export type ModelSettings = { baseUrl: string; apiKey?: string; model: string };
 
 /** Rough token count for when the server hasn't told us yet. Includes the tool definitions. */
-export function estimateTokens(messages: ChatMessage[]): number {
-	let chars = JSON.stringify(toolSchemas(tools)).length;
+export function estimateTokens(messages: ChatMessage[], toolList: Tool<any>[] = tools): number {
+	let chars = JSON.stringify(toolSchemas(toolList)).length;
 	for (const m of messages) {
 		chars += (m.content ?? '').length;
 		if (m.role === 'assistant') for (const c of m.tool_calls ?? []) chars += c.function.arguments.length + 20;
@@ -38,6 +38,8 @@ export function estimateTokens(messages: ChatMessage[]): number {
 export class Agent {
 	/** Tools the user said yes to for the rest of the session. */
 	readonly allowedForSession = new Set<string>();
+	/** The tools the model can use. */
+	tools: Tool<any>[] = tools;
 
 	constructor(
 		public settings: ModelSettings,
@@ -67,7 +69,7 @@ export class Agent {
 					apiKey: this.settings.apiKey,
 					model: this.settings.model,
 					messages: [{ role: 'system', content: this.system }, ...this.messages],
-					tools: toolSchemas(tools),
+					tools: toolSchemas(this.tools),
 					signal,
 					onReasoning: events.onReasoning,
 					onContent: (delta) => {
@@ -86,7 +88,7 @@ export class Agent {
 
 			events.onReply?.({ content: reply.content, reasoning: reply.reasoning });
 			if (reply.usage) events.onUsage?.(reply.usage.prompt_tokens + reply.usage.completion_tokens);
-			else events.onUsage?.(estimateTokens(this.messages) + Math.ceil((this.system.length + reply.content.length) / 4));
+			else events.onUsage?.(estimateTokens(this.messages, this.tools) + Math.ceil((this.system.length + reply.content.length) / 4));
 
 			this.push({
 				role: 'assistant',
@@ -121,7 +123,7 @@ export class Agent {
 		signal: AbortSignal,
 	): Promise<{ output: string; bad?: boolean; denied?: boolean }> {
 		const name = call.function.name;
-		const tool = findTool(name);
+		const tool = findTool(name, this.tools);
 		const finish = (label: string, result: ToolResult) => {
 			this.session.addToolDisplay(call.id, label, result);
 			events.onToolEnd?.({ id: call.id, name, label, result });
@@ -129,7 +131,7 @@ export class Agent {
 		};
 
 		if (!tool) {
-			const known = tools.map((t) => t.name).join(', ');
+			const known = this.tools.map((t) => t.name).join(', ');
 			events.onToolStart?.({ id: call.id, name: name || '(no name)', label: '' });
 			return { output: finish('', { output: `There is no tool called "${name}". The tools are: ${known}.`, isError: true }), bad: true };
 		}
