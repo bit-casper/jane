@@ -53,7 +53,7 @@ jane --host home     # use this host instead of the first one that answers
 | Shift+Tab | Switch permission mode |
 | Ctrl+C | Clear the input, or press twice to quit |
 
-Commands: `/clear`, `/model [name]`, `/permissions [mode]`, `/settings`, `/skills`, `/<skill> [request]`, `/prompt [init|diff]`, `/undo`, `/compact [focus]`, `/host [name]`, `/hooks [allow]`, `/help`, `/exit`.
+Commands: `/clear`, `/model [name]`, `/permissions [mode]`, `/settings`, `/skills`, `/<skill> [request]`, `/prompt [init|diff]`, `/undo`, `/compact [focus]`, `/host [name]`, `/hooks [allow]`, `/mcp [name]`, `/help`, `/exit`.
 
 ### Permission modes
 
@@ -171,6 +171,48 @@ asks before running them, and remembers your answer for that project. If the
 project's hooks change (say, after a `git pull`), Jane asks again. `/hooks`
 lists all hooks and whether they're on; `/hooks allow` turns on a project's
 hooks after you said "not now".
+
+### MCP servers
+
+[MCP](https://modelcontextprotocol.io) servers give Jane more tools: a
+browser to drive, an issue tracker, a database, and so on. Add each server as
+an `[mcp.<name>]` section in `~/.config/jane/config.toml`: either a `command`
+that Jane starts, or the `url` of a server running somewhere else.
+
+```toml
+# A browser Jane can drive (Playwright). Headless, with a throwaway profile.
+[mcp.browser]
+command = ["npx", "-y", "@playwright/mcp@latest", "--headless", "--isolated"]
+
+# A server on a URL, with only some of its tools.
+[mcp.tracker]
+url = "https://mcp.example.com/mcp"
+headers = { Authorization = "Bearer <token>" }
+tools = ["search_issues", "get_issue"]
+```
+
+Other settings per server: `env` (environment variables for a local
+server), `enabled = false` to keep it without starting it, and `timeout` for
+a tool call (120 seconds by default).
+
+- Servers start in the background when Jane starts, so they don't slow it
+  down; Jane says when each one is ready. They keep running until you quit.
+- The model sees their tools as `<server>__<tool>`; on screen they show as
+  `browser: browser_navigate`.
+- **Context:** every tool's description goes with every request. The
+  Playwright server's 25 tools take about 4k tokens. Use `tools = [...]` to
+  load only the ones you need; `/mcp` shows what each server costs.
+- **Permissions:** in always-ask mode, MCP tools ask first like `bash`,
+  except tools the server marks as read-only. Hooks apply to them too.
+- **Memory:** local servers run on this computer, even when the model runs on
+  another host. A browser takes a lot of memory; on a laptop that also runs
+  the model, that can slow the model down badly.
+- `/mcp` lists the servers and their status, `/mcp <name>` a server's tools,
+  `/mcp restart <name>` tries a server again.
+- **Project servers** in a project's `.jane/config.toml` start programs on
+  your computer, so Jane asks first, like project hooks, and asks again if
+  they change. `/mcp allow` turns them on later. A project can't redefine a
+  server you already have under the same name.
 
 ### Undo
 
@@ -295,6 +337,9 @@ api_key = ""
 [[hooks]]                     # your own commands at certain moments (see Hooks)
 event = "turn_end"
 command = 'notify-send "Jane" "Done"'
+
+[mcp.browser]                 # MCP servers: more tools for Jane (see MCP servers)
+command = ["npx", "-y", "@playwright/mcp@latest", "--headless", "--isolated"]
 
 [checkpoints]
 enabled = true                # save a copy before each write/edit, for /undo

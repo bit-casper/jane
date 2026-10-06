@@ -70,7 +70,7 @@ describe('settings', () => {
 		const keys: string[] = [];
 		const walk = (obj: Record<string, unknown>, prefix: string) => {
 			for (const [k, v] of Object.entries(obj)) {
-				if (typeof v === 'object' && v !== null && !Array.isArray(v)) walk(v as Record<string, unknown>, `${prefix}${k}.`);
+				if (typeof v === 'object' && v !== null && !Array.isArray(v) && Object.keys(v).length > 0) walk(v as Record<string, unknown>, `${prefix}${k}.`);
 				else keys.push(prefix + k);
 			}
 		};

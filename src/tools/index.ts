@@ -16,7 +16,7 @@ export function toolSchemas(list: Tool<any>[] = tools): ToolSchema[] {
 		function: {
 			name: tool.name,
 			description: tool.description,
-			parameters: {
+			parameters: tool.schema ?? {
 				type: 'object',
 				properties: Object.fromEntries(
 					Object.entries(tool.params).map(([key, spec]) => [key, { type: spec.type, description: spec.description }]),
@@ -44,6 +44,8 @@ export function parseArgs(tool: Tool<any>, raw: string): { args: Record<string, 
 	if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
 		return { error: `The arguments for ${tool.name} must be a JSON object.` };
 	}
+	// Tools with their own schema (MCP) check their arguments themselves.
+	if (tool.schema) return { args: parsed as Record<string, unknown> };
 	const args = { ...(parsed as Record<string, unknown>) };
 	const problems: string[] = [];
 	for (const [key, spec] of Object.entries(tool.params)) {

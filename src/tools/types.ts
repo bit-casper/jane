@@ -35,6 +35,8 @@ export type Tool<Args = Record<string, unknown>> = {
 	name: string;
 	description: string;
 	params: Record<string, ParamSpec>;
+	/** A full JSON schema for the arguments, used instead of `params` (MCP tools bring their own). */
+	schema?: Record<string, unknown>;
 	/** True if the tool can change things, so always-ask mode asks first. */
 	needsPermission: boolean;
 	/** Files the tool will change, so a checkpoint can be saved first for /undo. */

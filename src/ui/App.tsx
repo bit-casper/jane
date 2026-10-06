@@ -10,7 +10,8 @@ import { type Change, Checkpoints } from '../checkpoints.js';
 import { isSummary } from '../compact.js';
 import { compileBlockList } from '../blocklist.js';
 import { type Host, type HostManager, LOCAL_HOST, describeHost, probe } from '../hosts.js';
-import { type Hook, type HookEvent, type HookPayload, type HookRun, blockMessage, hookProblem, isTrusted, runHooks, shortCommand, trust } from '../hooks.js';
+import { type Hook, type HookEvent, type HookPayload, type HookRun, blockMessage, fingerprint, hookProblem, isTrusted, isTrustedPrint, runHooks, shortCommand, trust, trustPrint } from '../hooks.js';
+import { McpManager, type McpServerConfig } from '../mcp.js';
 import { log } from '../log.js';
 import { watchOmarchyTheme } from '../omarchy.js';
 import { configDir, tildify } from '../paths.js';
@@ -37,7 +38,7 @@ import { Input, type Suggestion } from './Input.js';
 import { PermissionPrompt } from './PermissionPrompt.js';
 import { ResumePicker } from './ResumePicker.js';
 import { SettingsMenu } from './SettingsMenu.js';
-import { TrustHooksPrompt } from './TrustHooksPrompt.js';
+import { TrustPrompt } from './TrustPrompt.js';
 import { UndoPicker } from './UndoPicker.js';
 import { renderMarkdown } from './markdown.js';
 import { ThemeContext, useColors } from './theme.js';
@@ -79,6 +80,7 @@ const COMMANDS: Suggestion[] = [
 	{ name: 'compact', description: 'Summarise the conversation to free up context' },
 	{ name: 'host', description: 'Show or switch the machine Jane uses' },
 	{ name: 'hooks', description: 'List your hooks' },
+	{ name: 'mcp', description: 'MCP servers and their tools' },
 	{ name: 'help', description: 'Commands and keys' },
 	{ name: 'exit', description: 'Quit Jane' },
 ];
@@ -97,6 +99,7 @@ const HELP = `Commands
   /compact [focus]    Summarise the conversation to free up context
   /host [name]        Show the hosts, or switch to one
   /hooks              List your hooks (/hooks allow turns on this project's)
+  /mcp [name]         MCP servers and their tools (/mcp allow, /mcp restart <name>)
   /help               Show this help
   /exit               Quit
 
@@ -107,6 +110,21 @@ Keys
   Esc                 Interrupt Jane
   Shift+Tab           Switch permission mode
   Ctrl+C              Clear the input, or press twice to quit`;
+
+type TrustRequest = { kind: 'hooks'; hooks: Hook[] } | { kind: 'mcp'; servers: Record<string, McpServerConfig> };
+
+/** What identifies a project's MCP servers for trust: if any of this changes, Jane asks again. */
+function mcpFingerprint(servers: Record<string, McpServerConfig>): string {
+	return fingerprint(Object.entries(servers).map(([name, { command, url, env, headers }]) => ({ name, command, url, env, headers })));
+}
+
+function describeMcpStatus(manager: McpManager, name: string): string {
+	const status = manager.status.get(name);
+	if (!status) return 'unknown';
+	if (status.state === 'connected') return `ready, ${status.tools} tools (~${formatTokens(status.tokens)} tokens)`;
+	if (status.state === 'failed') return `not available: ${status.reason}`;
+	return status.state;
+}
 
 let nextKey = 0;
 const key = () => String(nextKey++);
@@ -213,8 +231,12 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 	const [panel, setPanel] = useState<'settings' | null>(null);
 	const overridesRef = useRef<Overrides>({ ...overrides });
 	const [undoList, setUndoList] = useState<Change[] | null>(null);
-	/** A project's hooks waiting for the user's OK. */
-	const [askTrust, setAskTrust] = useState<Hook[] | null>(null);
+	/** What a project's config wants to run, waiting for the user's OK (one question at a time). */
+	const [trustQueue, setTrustQueue] = useState<TrustRequest[]>([]);
+	const askTrust = trustQueue[0];
+	const askFor = (request: TrustRequest) => setTrustQueue((q) => (q.some((r) => r.kind === request.kind) ? q : [...q, request]));
+	const mcpRef = useRef<McpManager | null>(null);
+	const mcpAnnounced = useRef(new Map<string, string>());
 	/** The hooks that run: the user's, plus the project's once allowed. */
 	const hooksRef = useRef<Hook[]>([]);
 	const [compacting, setCompacting] = useState(false);
@@ -267,7 +289,8 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 				session,
 				messages,
 			);
-			if (found.skills.some((s) => !s.userOnly)) agent.tools = [...baseTools, makeSkillTool(() => skillsRef.current)];
+			agentRef.current = agent;
+			refreshTools();
 			if (config.checkpoints.enabled) agent.checkpoints = new Checkpoints(session.file.replace(/\.jsonl$/, '.checkpoints'));
 			if (config.block_list.enabled) agent.blockRules = compileBlockList(config.block_list.patterns).rules;
 			agent.contextWindow = host.contextWindow;
@@ -333,11 +356,21 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 			const projectHooks = config.hooks.filter((h) => h.source === 'project');
 			const allowed = projectHooks.length > 0 && isTrusted(cwd, projectHooks);
 			hooksRef.current = allowed ? config.hooks : userHooks;
-			setAskTrust(projectHooks.length > 0 && !allowed ? projectHooks : null);
+			if (projectHooks.length > 0 && !allowed) askFor({ kind: 'hooks', hooks: projectHooks });
 			void fireHooks('session_start', {});
 		},
 		[config, cwd, warnings],
 	);
+
+	// MCP servers live as long as Jane does (they survive /clear): start them once.
+	useEffect(() => {
+		const user = Object.fromEntries(Object.entries(config.mcp).filter(([, s]) => s.source === 'user'));
+		const project = Object.fromEntries(Object.entries(config.mcp).filter(([, s]) => s.source === 'project'));
+		const allowed = Object.keys(project).length > 0 && isTrustedPrint(cwd, 'mcp', mcpFingerprint(project));
+		void startMcp(allowed ? { ...user, ...project } : user);
+		if (Object.keys(project).length && !allowed) askFor({ kind: 'mcp', servers: project });
+		return () => void mcpRef.current?.closeAll();
+	}, []);
 
 	useEffect(() => {
 		if (start.kind === 'load') begin(start.session);
@@ -386,6 +419,7 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 		const agent = agentRef.current;
 		onExit({ sessionId: agent?.session.id, started: Boolean(agent?.messages.length) });
 		await fireHooks('session_end', {});
+		await mcpRef.current?.closeAll();
 		exit();
 	};
 
@@ -506,12 +540,48 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 			case 'help':
 				info(HELP);
 				return;
+			case 'mcp': {
+				const manager = mcpRef.current;
+				const [sub = '', target = ''] = arg.split(/\s+/);
+				const project = Object.fromEntries(Object.entries(config.mcp).filter(([, s]) => s.source === 'project'));
+				if (sub === 'allow') {
+					if (!Object.keys(project).length) info('This project has no MCP servers of its own.');
+					else if (manager && Object.keys(project).every((n) => manager.servers[n])) info("This project's MCP servers are already on.");
+					else askFor({ kind: 'mcp', servers: project });
+					return;
+				}
+				if (sub === 'restart') {
+					if (!manager?.servers[target]) return info(`There is no MCP server called "${target}".`, 'error');
+					mcpAnnounced.current.delete(target);
+					info(`Restarting MCP server "${target}"…`);
+					await manager.connectAll([target]);
+					return;
+				}
+				if (!Object.keys(config.mcp).length) {
+					info('No MCP servers yet. Add them as [mcp.<name>] in ~/.config/jane/config.toml; see the README.');
+					return;
+				}
+				if (sub && manager?.servers[sub]) {
+					const tools = manager.serverTools(sub);
+					if (!tools.length) return info(`MCP server "${sub}" has no tools loaded (${describeMcpStatus(manager, sub)}).`);
+					const lines = tools.map((t) => `  ${toolTitle(t.name).padEnd(36)} ${t.needsPermission ? '' : '(read-only) '}${t.description.split('\n')[0]!.slice(0, 80)}`);
+					info(`Tools from "${sub}":\n${lines.join('\n')}`);
+					return;
+				}
+				const lines = Object.entries(config.mcp).map(([name, s]) => {
+					const where = s.command ? s.command.join(' ') : s.url!;
+					const status = manager?.servers[name] ? describeMcpStatus(manager, name) : 'off: not allowed yet, /mcp allow';
+					return `  ${name.padEnd(14)} ${s.source.padEnd(8)} ${status}\n      ${where}`;
+				});
+				info(`MCP servers:\n${lines.join('\n')}\n\n/mcp <name> lists a server's tools.`);
+				return;
+			}
 			case 'hooks': {
 				const projectHooks = config.hooks.filter((h) => h.source === 'project');
 				if (arg === 'allow') {
 					if (!projectHooks.length) info('This project has no hooks of its own.');
 					else if (hooksRef.current.some((h) => h.source === 'project')) info("This project's hooks are already on.");
-					else setAskTrust(projectHooks);
+					else askFor({ kind: 'hooks', hooks: projectHooks });
 					return;
 				}
 				if (!config.hooks.length) {
@@ -744,17 +814,63 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 		return { tool: call.name, args: call.args, file };
 	}
 
-	/** The user answered the question about this project's hooks. */
+	/** The user answered a question about what this project wants to run. */
 	function decideTrust(allow: boolean) {
-		const projectHooks = askTrust ?? [];
-		setAskTrust(null);
-		if (!allow) {
-			info("This project's hooks are off for now. /hooks allow turns them on.");
+		const request = trustQueue[0];
+		setTrustQueue((q) => q.slice(1));
+		if (!request) return;
+		if (request.kind === 'hooks') {
+			const projectHooks = request.hooks;
+			if (!allow) return info("This project's hooks are off for now. /hooks allow turns them on.");
+			trust(cwd, projectHooks);
+			hooksRef.current = [...hooksRef.current.filter((h) => h.source === 'user'), ...projectHooks];
+			info(`Allowed ${projectHooks.length === 1 ? "this project's hook" : `this project's ${projectHooks.length} hooks`}. Jane asks again if they change.`);
 			return;
 		}
-		trust(cwd, projectHooks);
-		hooksRef.current = [...hooksRef.current.filter((h) => h.source === 'user'), ...projectHooks];
-		info(`Allowed ${projectHooks.length === 1 ? "this project's hook" : `this project's ${projectHooks.length} hooks`}. Jane asks again if they change.`);
+		const names = Object.keys(request.servers);
+		if (!allow) return info("This project's MCP servers are off for now. /mcp allow turns them on.");
+		trustPrint(cwd, 'mcp', mcpFingerprint(request.servers));
+		info(`Allowed this project's MCP server${names.length === 1 ? '' : 's'} (${names.join(', ')}). Jane asks again if they change.`);
+		void startMcp(request.servers);
+	}
+
+	/** Start (more) MCP servers in the background; their tools appear when they're ready. */
+	async function startMcp(servers: Record<string, McpServerConfig>) {
+		if (!Object.keys(servers).length) return;
+		if (!mcpRef.current) mcpRef.current = new McpManager({}, cwd, mcpChanged);
+		Object.assign(mcpRef.current.servers, servers);
+		for (const [name, config] of Object.entries(servers)) mcpRef.current.status.set(name, config.enabled ? { state: 'connecting' } : { state: 'disabled' });
+		await mcpRef.current.connectAll(Object.keys(servers));
+	}
+
+	/** An MCP server connected, failed or changed its tools: update Jane's tools and say what happened. */
+	function mcpChanged() {
+		refreshTools();
+		const manager = mcpRef.current;
+		if (!manager) return;
+		for (const [name, status] of manager.status) {
+			const text =
+				status.state === 'connected'
+					? `MCP server "${name}" is ready: ${status.tools} tool${status.tools === 1 ? '' : 's'} (about ${formatTokens(status.tokens)} tokens of context).`
+					: status.state === 'failed'
+						? `MCP server "${name}" isn't available: ${status.reason}. /mcp restart ${name} tries again.`
+						: '';
+			if (text && mcpAnnounced.current.get(name) !== text) {
+				mcpAnnounced.current.set(name, text);
+				info(text, status.state === 'failed' ? 'warning' : 'info');
+			}
+		}
+	}
+
+	/** Jane's tools: the built-in ones, the skill tool if there are skills, and connected MCP servers' tools. */
+	function refreshTools() {
+		const agent = agentRef.current;
+		if (!agent) return;
+		agent.tools = [
+			...baseTools,
+			...(skillsRef.current.some((s) => !s.userOnly) ? [makeSkillTool(() => skillsRef.current)] : []),
+			...(mcpRef.current?.tools() ?? []),
+		];
 	}
 
 	/** Put the system prompt back together from its parts: base, environment, skills, instruction files. */
@@ -979,7 +1095,19 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 			{panel === 'settings' && (
 				<SettingsMenu cwd={cwd} config={config} height={rows} onSaved={(s) => settingSaved(s.key)} onClose={() => setPanel(null)} />
 			)}
-			{askTrust && <TrustHooksPrompt hooks={askTrust} project={tildify(cwd)} onDecide={decideTrust} />}
+			{askTrust && (
+				<TrustPrompt
+					key={askTrust.kind}
+					title={askTrust.kind === 'hooks' ? 'This project wants to run its own hooks' : 'This project wants to start its own MCP servers'}
+					project={tildify(cwd)}
+					lines={
+						askTrust.kind === 'hooks'
+							? askTrust.hooks.map((h) => ({ label: h.event, command: (h.tools.length ? `[${h.tools.join(', ')}] ` : '') + h.command }))
+							: Object.entries(askTrust.servers).map(([name, s]) => ({ label: name, command: s.command ? s.command.join(' ') : s.url! }))
+					}
+					onDecide={decideTrust}
+				/>
+			)}
 			{undoList && agentRef.current?.checkpoints && (
 				<UndoPicker changes={undoList} checkpoints={agentRef.current.checkpoints} cwd={cwd} height={rows} onDone={undoFinished} />
 			)}
