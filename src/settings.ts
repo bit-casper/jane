@@ -32,6 +32,8 @@ export const SETTINGS: Setting[] = [
 	{ key: 'model.base_url', section: 'Model', label: 'Server URL', type: 'string', description: 'Address of the OpenAI-compatible model server, ending in /v1.' },
 	{ key: 'model.name', section: 'Model', label: 'Model', type: 'string', description: 'Model name to ask the server for. /model changes it for one session only.' },
 	{ key: 'model.context_window', section: 'Model', label: 'Context window', type: 'number', description: 'How many tokens the model can hold. Match the server (llama-server -c).' },
+	{ key: 'compact.auto', section: 'Model', label: 'Auto compact', type: 'boolean', description: 'Summarise the conversation automatically when the context gets full, so long sessions keep working.' },
+	{ key: 'compact.at_percent', section: 'Model', label: 'Compact at %', type: 'number', description: 'How full the context gets (10–95%) before Jane compacts automatically.' },
 	{ key: 'model.api_key', section: 'Model', label: 'API key', type: 'secret', description: 'Only needed for servers that require one. Leave empty for llama-server.' },
 	{
 		key: 'permissions.default_mode', section: 'Permissions', label: 'Default mode', type: 'enum', options: ['always-ask', 'unrestricted'],
@@ -99,6 +101,7 @@ export function parseInput(setting: Setting, text: string): { value: unknown } |
 	switch (setting.type) {
 		case 'number': {
 			if (!/^\d+$/.test(raw) || Number(raw) <= 0) return { error: 'Enter a whole number above 0.' };
+			if (setting.key === 'compact.at_percent' && (Number(raw) < 10 || Number(raw) > 95)) return { error: 'Enter a number from 10 to 95.' };
 			return { value: Number(raw) };
 		}
 		case 'list': {

@@ -52,7 +52,7 @@ jane --mode unrestricted
 | Shift+Tab | Switch permission mode |
 | Ctrl+C | Clear the input, or press twice to quit |
 
-Commands: `/clear`, `/model [name]`, `/permissions [mode]`, `/settings`, `/skills`, `/<skill> [request]`, `/undo`, `/help`, `/exit`.
+Commands: `/clear`, `/model [name]`, `/permissions [mode]`, `/settings`, `/skills`, `/<skill> [request]`, `/undo`, `/compact [focus]`, `/help`, `/exit`.
 
 ### Permission modes
 
@@ -60,6 +60,20 @@ Commands: `/clear`, `/model [name]`, `/permissions [mode]`, `/settings`, `/skill
   Writing and editing files and running commands show what will happen and
   ask first.
 - **unrestricted**: Jane runs every tool without asking.
+
+### Long sessions
+
+The context window (64k tokens on the laptop) fills up as a session goes on;
+the status line shows how full it is. When it passes 80%, Jane compacts the
+conversation: the model writes a summary (requests, work done, current state,
+next steps, key facts) and that replaces the history, even in the middle of a
+task. If the server says the conversation doesn't fit, Jane compacts and tries
+again. `/compact` does it by hand, optionally with a focus:
+`/compact keep the details of the API errors`.
+
+Nothing disappears from your screen, and `--resume` still shows the whole
+conversation; only the model works from the summary. Turn automatic compaction
+off or change when it happens with `compact.auto` and `compact.at_percent`.
 
 ### Undo
 
@@ -137,6 +151,10 @@ filenames = ["JANE.md"]       # first one found wins, e.g. ["JANE.md", "AGENTS.m
 [skills]
 sources = ["jane", "claude", "omarchy"]
 extra_dirs = []               # more folders with skills in them
+
+[compact]
+auto = true                   # summarise automatically when the context fills up
+at_percent = 80               # how full (10–95%) before compacting
 
 [checkpoints]
 enabled = true                # save a copy before each write/edit, for /undo

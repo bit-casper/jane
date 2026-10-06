@@ -1,11 +1,12 @@
 import path from 'node:path';
 import { Box, Static, Text, useApp, useInput, useWindowSize } from 'ink';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Agent, MAX_BAD_CALLS, stripNotes, type PermissionDecision, type PermissionRequest, estimateTokens } from '../agent.js';
+import { Agent, type AgentEvents, MAX_BAD_CALLS, stripNotes, type PermissionDecision, type PermissionRequest } from '../agent.js';
 import { type ChatMessage, ModelError, listModels } from '../client.js';
 import { type Config, type PermissionMode, loadConfig } from '../config.js';
 import { type InstructionFile, loadInstructions } from '../instructions.js';
 import { type Change, Checkpoints } from '../checkpoints.js';
+import { isSummary } from '../compact.js';
 import { compileBlockList } from '../blocklist.js';
 import { log } from '../log.js';
 import { watchOmarchyTheme } from '../omarchy.js';
@@ -63,6 +64,7 @@ const COMMANDS: Suggestion[] = [
 	{ name: 'settings', description: 'Change Jane\'s settings' },
 	{ name: 'skills', description: 'List the skills Jane can use' },
 	{ name: 'undo', description: 'Undo file changes Jane made' },
+	{ name: 'compact', description: 'Summarise the conversation to free up context' },
 	{ name: 'help', description: 'Commands and keys' },
 	{ name: 'exit', description: 'Quit Jane' },
 ];
@@ -75,6 +77,7 @@ const HELP = `Commands
   /skills             List the skills Jane can use
   /<skill> [request]  Run a skill, e.g. /omarchy change the gaps
   /undo               Undo file changes Jane made
+  /compact [focus]    Summarise the conversation to free up context
   /help               Show this help
   /exit               Quit
 
@@ -95,7 +98,8 @@ function itemsFromMessages(messages: ChatMessage[], displays: Map<string, ToolDi
 	const results = new Map<string, string>();
 	for (const m of messages) if (m.role === 'tool') results.set(m.tool_call_id, m.content);
 	for (const m of messages) {
-		if (m.role === 'user') items.push({ key: key(), kind: 'user', text: typedText(stripNotes(m.content)) });
+		if (m.role === 'user' && isSummary(m)) items.push({ key: key(), kind: 'info', text: 'Conversation compacted here. Jane continues from a summary.' });
+		else if (m.role === 'user') items.push({ key: key(), kind: 'user', text: typedText(stripNotes(m.content)) });
 		else if (m.role === 'assistant') {
 			if (m.content?.trim()) items.push({ key: key(), kind: 'assistant', text: m.content });
 			for (const call of m.tool_calls ?? []) {
@@ -186,6 +190,7 @@ function Main({ config, setConfig, overrides, warnings, version, cwd, start, cle
 	const [panel, setPanel] = useState<'settings' | null>(null);
 	const overridesRef = useRef<Overrides>({ ...overrides });
 	const [undoList, setUndoList] = useState<Change[] | null>(null);
+	const [compacting, setCompacting] = useState(false);
 
 	const agentRef = useRef<Agent | null>(null);
 	const abortRef = useRef<AbortController | null>(null);
@@ -209,11 +214,13 @@ function Main({ config, setConfig, overrides, warnings, version, cwd, start, cle
 			skillsRef.current = found.skills;
 			const listed = skillsPrompt(found.skills);
 			let messages: ChatMessage[] = [];
+			let allMessages: ChatMessage[] = [];
 			let displays = new Map<string, ToolDisplayRecord>();
 			let restoredMode: PermissionMode | undefined;
 			if (resume) {
 				const loaded = loadSession(resume.file);
 				messages = loaded.messages;
+				allMessages = loaded.allMessages;
 				displays = loaded.toolDisplays;
 				restoredMode = loaded.mode;
 			}
@@ -230,11 +237,13 @@ function Main({ config, setConfig, overrides, warnings, version, cwd, start, cle
 			if (found.skills.some((s) => !s.userOnly)) agent.tools = [...baseTools, makeSkillTool(() => skillsRef.current)];
 			if (config.checkpoints.enabled) agent.checkpoints = new Checkpoints(session.file.replace(/\.jsonl$/, '.checkpoints'));
 			if (config.block_list.enabled) agent.blockRules = compileBlockList(config.block_list.patterns).rules;
+			agent.contextWindow = config.model.context_window;
+			agent.autoCompactPercent = config.compact.auto ? config.compact.at_percent : 0;
 			agentRef.current = agent;
 			setModeState(startMode);
 			setModel(agent.settings.model);
-			setTokens(estimateTokens(messages, agent.tools) + Math.ceil(agent.system.length / 4));
-			setPromptHistory(messages.flatMap((m) => (m.role === 'user' ? [typedText(stripNotes(m.content))] : [])));
+			setTokens(agent.contextTokens());
+			setPromptHistory(allMessages.flatMap((m) => (m.role === 'user' && !isSummary(m) ? [typedText(stripNotes(m.content))] : [])));
 
 			const head: HistoryItem[] = [{ key: key(), kind: 'banner' }];
 			for (const w of warnings) head.push({ key: key(), kind: 'info', text: `Config: ${w}`, tone: 'warning' });
@@ -246,7 +255,7 @@ function Main({ config, setConfig, overrides, warnings, version, cwd, start, cle
 				head.push({ key: key(), kind: 'info', text: `Skills: ${found.skills.map((s) => s.name).join(', ')}` });
 			}
 			if (resume) {
-				head.push(...itemsFromMessages(messages, displays, cwd));
+				head.push(...itemsFromMessages(allMessages, displays, cwd));
 				head.push({ key: key(), kind: 'info', text: `Resumed session from ${resume.updated.toLocaleString()}` });
 			}
 			setItems(head);
@@ -316,57 +325,70 @@ function Main({ config, setConfig, overrides, warnings, version, cwd, start, cle
 		if (interrupted) info('Interrupted. Tell Jane what to do instead.', 'warning');
 	};
 
-	const runPrompt = async (prompt: string) => {
-		const agent = agentRef.current!;
+	/** Run something that keeps Jane busy (a prompt, or /compact), with the spinner, Esc and errors handled. */
+	const work = async <T,>(task: (events: AgentEvents, signal: AbortSignal) => Promise<T>): Promise<T | undefined> => {
 		const controller = new AbortController();
 		abortRef.current = controller;
 		setBusy(true);
 		setStartedAt(Date.now());
 		liveRef.current = { reasoning: '', content: '' };
+		const events: AgentEvents = {
+			onReasoning(delta) {
+				liveRef.current.thinkStart ??= Date.now();
+				liveRef.current.reasoning += delta;
+			},
+			onContent(delta) {
+				liveRef.current.content += delta;
+			},
+			onReply() {
+				flushLive(false);
+			},
+			onToolStart(call) {
+				setRunning((r) => [...r, call]);
+			},
+			onToolEnd(call) {
+				setRunning((r) => r.filter((c) => c.id !== call.id));
+				push({ key: key(), kind: 'tool', name: call.name, label: call.label, result: call.result });
+			},
+			onUsage: setTokens,
+			onCompacting() {
+				setCompacting(true);
+			},
+			onCompacted({ before, after, auto }) {
+				setCompacting(false);
+				info(`Conversation compacted${auto ? ' automatically' : ''}: ${formatTokens(before)} → ${formatTokens(after)} tokens. Jane continues from a summary.`);
+			},
+			onNotice: info,
+			askPermission(request) {
+				return new Promise((resolve) => setPermission({ request, resolve }));
+			},
+		};
 		try {
-			const outcome = await agent.run(
-				prompt,
-				{
-					onReasoning(delta) {
-						liveRef.current.thinkStart ??= Date.now();
-						liveRef.current.reasoning += delta;
-					},
-					onContent(delta) {
-						liveRef.current.content += delta;
-					},
-					onReply() {
-						flushLive(false);
-					},
-					onToolStart(call) {
-						setRunning((r) => [...r, call]);
-					},
-					onToolEnd(call) {
-						setRunning((r) => r.filter((c) => c.id !== call.id));
-						push({ key: key(), kind: 'tool', name: call.name, label: call.label, result: call.result });
-					},
-					onUsage: setTokens,
-					askPermission(request) {
-						return new Promise((resolve) => setPermission({ request, resolve }));
-					},
-				},
-				controller.signal,
-			);
-			if (outcome === 'interrupted') flushLive(true);
-			else if (outcome === 'too-many-bad-calls') {
-				info(`Jane stopped: the model made ${MAX_BAD_CALLS} bad tool calls in a row. Try rephrasing, or check the model server.`, 'error');
-			} else if (outcome === 'step-limit') info('Jane stopped after too many steps in one turn.', 'warning');
+			return await task(events, controller.signal);
 		} catch (error) {
-			flushLive(false);
+			flushLive(controller.signal.aborted);
+			if (controller.signal.aborted) return undefined;
 			const message = error instanceof ModelError ? error.message : `Unexpected error: ${(error as Error).message}`;
 			if (!(error instanceof ModelError)) log('run failed', error);
 			info(message, 'error');
+			return undefined;
 		} finally {
 			abortRef.current = null;
 			setRunning([]);
 			setPermission(null);
+			setCompacting(false);
 			setBusy(false);
 			if (recolorPendingRef.current) redrawHistory();
 		}
+	};
+
+	const runPrompt = async (prompt: string) => {
+		const agent = agentRef.current!;
+		const outcome = await work((events, signal) => agent.run(prompt, events, signal));
+		if (outcome === 'interrupted') flushLive(true);
+		else if (outcome === 'too-many-bad-calls') {
+			info(`Jane stopped: the model made ${MAX_BAD_CALLS} bad tool calls in a row. Try rephrasing, or check the model server.`, 'error');
+		} else if (outcome === 'step-limit') info('Jane stopped after too many steps in one turn.', 'warning');
 	};
 
 	const runCommand = async (line: string) => {
@@ -387,6 +409,14 @@ function Main({ config, setConfig, overrides, warnings, version, cwd, start, cle
 			case 'help':
 				info(HELP);
 				return;
+			case 'compact': {
+				if (agent.messages.length === 0) {
+					info('Nothing to compact yet.');
+					return;
+				}
+				await work((events, signal) => agent.compact(events, signal, { focus: arg }));
+				return;
+			}
 			case 'settings':
 				setPanel('settings');
 				return;
@@ -488,6 +518,8 @@ function Main({ config, setConfig, overrides, warnings, version, cwd, start, cle
 				agent.session.setModel(next.model.name);
 				setModel(next.model.name);
 			}
+			agent.contextWindow = next.model.context_window;
+			agent.autoCompactPercent = next.compact.auto ? next.compact.at_percent : 0;
 			if (key === 'checkpoints.enabled') {
 				agent.checkpoints = next.checkpoints.enabled ? new Checkpoints(agent.session.file.replace(/\.jsonl$/, '.checkpoints')) : undefined;
 			}
@@ -576,11 +608,13 @@ function Main({ config, setConfig, overrides, warnings, version, cwd, start, cle
 		? renderMarkdown(live.content, colors.assistant, colors.accent, columns - 2).split('\n').slice(-liveRoom).join('\n')
 		: '';
 	const seconds = Math.round((Date.now() - startedAt) / 1000);
-	const activity = running.length
-		? `${toolTitle(running[0]!.name)}${running[0]!.label ? ` ${running[0]!.label}` : ''}`
-		: live.reasoning && !live.content
-			? 'Thinking…'
-			: 'Working…';
+	const activity = compacting
+		? 'Compacting conversation…'
+		: running.length
+			? `${toolTitle(running[0]!.name)}${running[0]!.label ? ` ${running[0]!.label}` : ''}`
+			: live.reasoning && !live.content
+				? 'Thinking…'
+				: 'Working…';
 
 	return (
 		<Box flexDirection="column">

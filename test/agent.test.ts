@@ -8,10 +8,11 @@ import { Agent, type AgentEvents, type PermissionDecision } from '../src/agent.j
 import { DEFAULT_BLOCK_PATTERNS, compileBlockList } from '../src/blocklist.js';
 import { ModelError } from '../src/client.js';
 import { Checkpoints } from '../src/checkpoints.js';
+import { SUMMARY_SYSTEM, isSummary } from '../src/compact.js';
 import { Session, loadSession } from '../src/session.js';
 
 // A fake OpenAI-compatible server. Each test queues the replies it should stream.
-type Reply = { content?: string; reasoning?: string; calls?: { name: string; args: string }[] } | { status: number };
+type Reply = { content?: string; reasoning?: string; calls?: { name: string; args: string }[]; promptTokens?: number; delay?: number } | { status: number; body?: string };
 let replies: Reply[] = [];
 let requests: any[] = [];
 let server: http.Server;
@@ -25,7 +26,7 @@ function sse(reply: Exclude<Reply, { status: number }>): string {
 		chunks.push({ choices: [{ delta: { tool_calls: [{ index, id: `id${index}`, function: { name: call.name, arguments: '' } }] } }] });
 		chunks.push({ choices: [{ delta: { tool_calls: [{ index, function: { arguments: call.args } }] } }] });
 	});
-	chunks.push({ choices: [{ delta: {}, finish_reason: reply.calls ? 'tool_calls' : 'stop' }], usage: { prompt_tokens: 100, completion_tokens: 20 } });
+	chunks.push({ choices: [{ delta: {}, finish_reason: reply.calls ? 'tool_calls' : 'stop' }], usage: { prompt_tokens: reply.promptTokens ?? 100, completion_tokens: 20 } });
 	return chunks.map((c) => `data: ${JSON.stringify(c)}\n\n`).join('') + 'data: [DONE]\n\n';
 }
 
@@ -37,10 +38,10 @@ beforeAll(async () => {
 			requests.push(JSON.parse(body));
 			const reply = replies.shift() ?? { content: 'out of replies' };
 			if ('status' in reply) {
-				res.writeHead(reply.status).end('{"error":"boom"}');
+				res.writeHead(reply.status).end(reply.body ?? '{"error":"boom"}');
 				return;
 			}
-			res.writeHead(200, { 'Content-Type': 'text/event-stream' }).end(sse(reply));
+			setTimeout(() => res.writeHead(200, { 'Content-Type': 'text/event-stream' }).end(sse(reply)), reply.delay ?? 0);
 		});
 	});
 	await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
@@ -224,5 +225,123 @@ describe('agent loop', () => {
 			expect(fs.existsSync(path.join(dir, 'ran.txt'))).toBe(false);
 			expect(requests.at(-1).messages.at(-1).content).toMatch(/^Error: this command was blocked by Jane's block list/);
 		}
+	});
+
+	describe('compaction', () => {
+		const isSummaryRequest = (r: any) => r.messages[0].content === SUMMARY_SYSTEM;
+
+		it('replaces the conversation with a summary on /compact, and keeps it on resume', async () => {
+			replies = [{ content: 'Paris.' }];
+			const agent = makeAgent();
+			await agent.run('What is the capital of France?', recorder().events, new AbortController().signal);
+			replies = [{ reasoning: 'thinking about it', content: '## User\'s requests\nAsked for the capital of France.' }];
+			const compacted: any[] = [];
+			const events = { ...recorder().events, onCompacted: (i: any) => compacted.push(i) };
+			const result = await agent.compact(events, new AbortController().signal, { focus: 'geography' });
+
+			const req = requests.at(-1);
+			expect(isSummaryRequest(req)).toBe(true);
+			expect(req.tools).toBeUndefined();
+			expect(req.messages[1].content).toContain('User: What is the capital of France?');
+			expect(req.messages[1].content).toContain('Jane: Paris.');
+			expect(req.messages[1].content).toContain('focus on: geography');
+
+			expect(agent.messages).toHaveLength(1);
+			expect(isSummary(agent.messages[0]!)).toBe(true);
+			expect(agent.messages[0]!.content).toContain('Asked for the capital of France.');
+			expect(compacted).toEqual([{ ...result, auto: false }]);
+
+			replies = [{ content: 'ok' }];
+			await agent.run('and Spain?', recorder().events, new AbortController().signal);
+			const loaded = loadSession(agent.session.file);
+			expect(loaded.messages.map((m) => m.role)).toEqual(['user', 'user', 'assistant']);
+			expect(isSummary(loaded.messages[0]!)).toBe(true);
+			expect(loaded.allMessages.map((m) => m.content)).toEqual([
+				'What is the capital of France?',
+				'Paris.',
+				agent.messages[0]!.content,
+				'and Spain?',
+				'ok',
+			]);
+		});
+
+		it('compacts before a new prompt when the context is nearly full, keeping the prompt word for word', async () => {
+			const agent = makeAgent();
+			agent.contextWindow = 1000;
+			agent.autoCompactPercent = 80;
+			replies = [{ content: 'first answer', promptTokens: 900 }];
+			await agent.run('first', recorder().events, new AbortController().signal);
+			replies = [{ content: 'summary of first' }, { content: 'second answer' }];
+			await agent.run('second question', recorder().events, new AbortController().signal);
+			expect(isSummaryRequest(requests.at(-2))).toBe(true);
+			const last = requests.at(-1).messages;
+			expect(last.slice(1).map((m: any) => m.content)).toEqual([expect.stringContaining('summary of first'), 'second question']);
+		});
+
+		it('compacts in the middle of a task and carries on', async () => {
+			fs.writeFileSync(path.join(dir, 'big.txt'), ('x'.repeat(100) + '\n').repeat(60));
+			const agent = makeAgent();
+			agent.contextWindow = 1500;
+			agent.autoCompactPercent = 80;
+			const notices: string[] = [];
+			replies = [
+				{ calls: [{ name: 'read', args: '{"path":"big.txt"}' }], promptTokens: 300 },
+				{ content: 'Summary: reading big.txt for the user.' },
+				{ content: 'It is full of x.' },
+			];
+			const events = { ...recorder().events, onCompacted: () => notices.push('compacted') };
+			expect(await agent.run('what is in big.txt?', events, new AbortController().signal)).toBe('done');
+			expect(notices).toEqual(['compacted']);
+			expect(requests.map(isSummaryRequest)).toEqual([false, true, false]);
+			// The summary request had the long tool output shortened.
+			expect(requests[1].messages[1].content).toMatch(/characters cut/);
+			expect(agent.messages.map((m) => m.role)).toEqual(['user', 'assistant']);
+		});
+
+		it('compacts and retries once when the server says the context is full', async () => {
+			const agent = makeAgent();
+			replies = [{ content: 'a' }];
+			await agent.run('one', recorder().events, new AbortController().signal);
+			replies = [
+				{ status: 400, body: '{"error":{"message":"the request exceeds the available context size, try increasing it"}}' },
+				{ content: 'summary' },
+				{ content: 'answer' },
+			];
+			const notices: string[] = [];
+			const events = { ...recorder().events, onNotice: (t: string) => notices.push(t) };
+			expect(await agent.run('two', events, new AbortController().signal)).toBe('done');
+			expect(notices).toEqual([expect.stringMatching(/no longer fits/)]);
+			expect(requests.slice(-3).map(isSummaryRequest)).toEqual([false, true, false]);
+
+			// A second overflow in the same turn is reported, not retried forever.
+			replies = [
+				{ status: 400, body: 'exceeds the available context size' },
+				{ content: 'summary' },
+				{ status: 400, body: 'exceeds the available context size' },
+			];
+			await expect(agent.run('three', recorder().events, new AbortController().signal)).rejects.toThrow(/context size/);
+		});
+
+		it('leaves the conversation alone when compacting is interrupted', async () => {
+			const agent = makeAgent();
+			replies = [{ content: 'a' }];
+			await agent.run('one', recorder().events, new AbortController().signal);
+			const before = [...agent.messages];
+			replies = [{ content: 'summary', delay: 500 }];
+			const controller = new AbortController();
+			setTimeout(() => controller.abort(), 100);
+			await expect(agent.compact(recorder().events, controller.signal)).rejects.toThrow();
+			expect(agent.messages).toEqual(before);
+			expect(loadSession(agent.session.file).messages).toEqual(before);
+		});
+
+		it('refuses to compact an empty conversation or keep an empty summary', async () => {
+			const agent = makeAgent();
+			await expect(agent.compact(recorder().events, new AbortController().signal)).rejects.toThrow(/nothing to compact/);
+			replies = [{ content: 'a' }, { content: '   ' }];
+			await agent.run('one', recorder().events, new AbortController().signal);
+			await expect(agent.compact(recorder().events, new AbortController().signal)).rejects.toThrow(/empty summary/);
+			expect(agent.messages).toHaveLength(2);
+		});
 	});
 });

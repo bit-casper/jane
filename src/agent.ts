@@ -1,4 +1,5 @@
-import { type ChatMessage, type StreamResult, type ToolCall, streamChat } from './client.js';
+import { type ChatMessage, ModelError, type StreamResult, type ToolCall, streamChat } from './client.js';
+import { SUMMARY_SYSTEM, fittingTranscript, isContextOverflow, summaryMessage, summaryRequest } from './compact.js';
 import type { PermissionMode } from './config.js';
 import type { Checkpoints } from './checkpoints.js';
 import { type BlockRule, blockedBy, describeRule } from './blocklist.js';
@@ -20,6 +21,11 @@ export type AgentEvents = {
 	onToolStart?(call: { id: string; name: string; label: string }): void;
 	onToolEnd?(call: { id: string; name: string; label: string; result: ToolResult }): void;
 	onUsage?(tokens: number): void;
+	/** Jane is about to compact the conversation (the model is writing a summary). */
+	onCompacting?(info: { auto: boolean }): void;
+	onCompacted?(info: { before: number; after: number; auto: boolean }): void;
+	/** Something worth telling the user that isn't part of the conversation. */
+	onNotice?(text: string, tone: 'info' | 'warning' | 'error'): void;
 	askPermission(request: PermissionRequest): Promise<PermissionDecision>;
 };
 
@@ -29,7 +35,11 @@ export type ModelSettings = { baseUrl: string; apiKey?: string; model: string };
 
 /** Rough token count for when the server hasn't told us yet. Includes the tool definitions. */
 export function estimateTokens(messages: ChatMessage[], toolList: Tool<any>[] = tools): number {
-	let chars = JSON.stringify(toolSchemas(toolList)).length;
+	return Math.ceil(JSON.stringify(toolSchemas(toolList)).length / 4) + estimateMessages(messages);
+}
+
+function estimateMessages(messages: ChatMessage[]): number {
+	let chars = 0;
 	for (const m of messages) {
 		chars += (m.content ?? '').length;
 		if (m.role === 'assistant') for (const c of m.tool_calls ?? []) chars += c.function.arguments.length + 20;
@@ -54,6 +64,12 @@ export class Agent {
 	private currentPrompt = '';
 	/** Bash commands matching these are refused, whatever the permission mode. */
 	blockRules: BlockRule[] = [];
+	/** How many tokens the model can hold. */
+	contextWindow = 65536;
+	/** Compact automatically when the context is fuller than this percentage (0 turns it off). */
+	autoCompactPercent = 80;
+	/** Tokens in use according to the server's last reply, and how many messages that covered. */
+	private usage = { tokens: 0, messages: 0 };
 
 	constructor(
 		public settings: ModelSettings,
@@ -69,14 +85,80 @@ export class Agent {
 		this.session.addMessage(message);
 	}
 
+	/** Tokens the next request will use, about: the server's last count plus an estimate for what came after. */
+	contextTokens(): number {
+		if (this.usage.messages > this.messages.length) this.usage = { tokens: 0, messages: 0 };
+		const base = this.usage.tokens || estimateTokens([], this.tools) + Math.ceil(this.system.length / 4);
+		return base + estimateMessages(this.messages.slice(this.usage.messages));
+	}
+
+	private needsCompacting(extra = 0): boolean {
+		return this.autoCompactPercent > 0 && this.messages.length > 1 && this.contextTokens() + extra > (this.contextWindow * this.autoCompactPercent) / 100;
+	}
+
+	/**
+	 * Replace the conversation with a summary written by the model. On failure
+	 * (or Esc) the conversation is left as it was.
+	 */
+	async compact(events: AgentEvents, signal: AbortSignal, options: { focus?: string; auto?: boolean } = {}): Promise<{ before: number; after: number }> {
+		if (this.messages.length === 0) throw new ModelError('there is nothing to compact yet');
+		const auto = Boolean(options.auto);
+		const before = this.contextTokens();
+		events.onCompacting?.({ auto });
+		// Leave room for the instructions, the model's thinking and the summary itself.
+		const budget = Math.max(2000, this.contextWindow - 12000);
+		const reply = await streamChat({
+			baseUrl: this.settings.baseUrl,
+			apiKey: this.settings.apiKey,
+			model: this.settings.model,
+			messages: [
+				{ role: 'system', content: SUMMARY_SYSTEM },
+				{ role: 'user', content: summaryRequest(fittingTranscript(this.messages, budget), options.focus) },
+			],
+			tools: [],
+			signal,
+		});
+		const summary = reply.content.trim();
+		if (!summary) throw new ModelError('the model returned an empty summary, so nothing was compacted');
+		this.session.addCompaction(before);
+		this.messages.splice(0);
+		this.push(summaryMessage(summary));
+		this.usage = { tokens: 0, messages: 0 };
+		const after = this.contextTokens();
+		events.onCompacted?.({ before, after, auto });
+		events.onUsage?.(after);
+		return { before, after };
+	}
+
+	/** Compact automatically; if that fails, say so and carry on with the full conversation. */
+	private async autoCompact(events: AgentEvents, signal: AbortSignal): Promise<void> {
+		try {
+			await this.compact(events, signal, { auto: true });
+		} catch (error) {
+			if (signal.aborted) return;
+			events.onNotice?.(`Couldn't compact the conversation: ${(error as Error).message}`, 'warning');
+		}
+	}
+
 	/** Run one user turn: the model replies, uses tools, and repeats until it's done. */
 	async run(prompt: string, events: AgentEvents, signal: AbortSignal): Promise<TurnOutcome> {
 		this.currentPrompt = prompt;
 		const notes = this.notes.splice(0);
-		this.push({ role: 'user', content: notes.length ? `${notes.map((n) => `[Note from Jane: ${n}]`).join('\n')}\n\n${prompt}` : prompt });
+		const content = notes.length ? `${notes.map((n) => `[Note from Jane: ${n}]`).join('\n')}\n\n${prompt}` : prompt;
+		// Compact before adding the new prompt, so the prompt itself stays word for word.
+		if (this.needsCompacting(Math.ceil(content.length / 4))) {
+			await this.autoCompact(events, signal);
+			if (signal.aborted) return 'interrupted';
+		}
+		this.push({ role: 'user', content });
 		let badCalls = 0;
+		let overflowRetried = false;
 
 		for (let step = 0; step < MAX_STEPS; step++) {
+			if (step > 0 && this.needsCompacting()) {
+				await this.autoCompact(events, signal);
+				if (signal.aborted) return 'interrupted';
+			}
 			let reply: StreamResult;
 			let content = '';
 			try {
@@ -99,18 +181,25 @@ export class Agent {
 					if (content.trim()) this.push({ role: 'assistant', content: content + '\n\n[interrupted by the user]' });
 					return 'interrupted';
 				}
+				// The conversation didn't fit: compact and try once more.
+				if (error instanceof ModelError && isContextOverflow(error.message) && !overflowRetried && this.messages.length > 1) {
+					overflowRetried = true;
+					events.onNotice?.('The conversation no longer fits in the context window, so Jane is compacting it.', 'warning');
+					await this.compact(events, signal, { auto: true });
+					step--;
+					continue;
+				}
 				throw error;
 			}
 
 			events.onReply?.({ content: reply.content, reasoning: reply.reasoning });
-			if (reply.usage) events.onUsage?.(reply.usage.prompt_tokens + reply.usage.completion_tokens);
-			else events.onUsage?.(estimateTokens(this.messages, this.tools) + Math.ceil((this.system.length + reply.content.length) / 4));
-
 			this.push({
 				role: 'assistant',
 				content: reply.content || null,
 				...(reply.toolCalls.length ? { tool_calls: reply.toolCalls } : {}),
 			});
+			if (reply.usage) this.usage = { tokens: reply.usage.prompt_tokens + reply.usage.completion_tokens, messages: this.messages.length };
+			events.onUsage?.(this.contextTokens());
 			if (reply.toolCalls.length === 0) return 'done';
 
 			let outcome: TurnOutcome | undefined;
