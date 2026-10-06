@@ -419,6 +419,17 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 		setStaticKey((k) => k + 1);
 	}, [clearScreen]);
 
+	// When the window changes size (a tiling window manager does this whenever a window opens or closes next
+	// to Jane), what was drawn at the old width gets re-wrapped by the terminal and can't be erased properly,
+	// leaving old input boxes behind. So once the resizing settles, clear the screen and draw everything again.
+	const sizeRef = useRef({ columns, rows });
+	useEffect(() => {
+		if (sizeRef.current.columns === columns && sizeRef.current.rows === rows) return;
+		sizeRef.current = { columns, rows };
+		const timer = setTimeout(() => redrawHistory(), 150);
+		return () => clearTimeout(timer);
+	}, [columns, rows]);
+
 	// Follow Omarchy theme changes: new colours apply right away, and the history is redrawn in them.
 	useEffect(() => {
 		if (config.ui.theme !== 'omarchy') return;
