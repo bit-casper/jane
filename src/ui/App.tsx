@@ -6,6 +6,7 @@ import { type ChatMessage, ModelError, listModels } from '../client.js';
 import { type Config, type PermissionMode, loadConfig } from '../config.js';
 import { type InstructionFile, loadInstructions } from '../instructions.js';
 import { log } from '../log.js';
+import { watchOmarchyTheme } from '../omarchy.js';
 import { tildify } from '../paths.js';
 import { systemPrompt } from '../prompt.js';
 import { type SessionSummary, Session, type ToolDisplayRecord, loadSession } from '../session.js';
@@ -180,6 +181,9 @@ function Main({ config, setConfig, overrides, warnings, version, cwd, start, cle
 	const liveRef = useRef<Live>({ reasoning: '', content: '' });
 	const exitArmedRef = useRef(0);
 	const instructionsRef = useRef<InstructionFile[]>([]);
+	const busyRef = useRef(false);
+	const recolorPendingRef = useRef(false);
+	busyRef.current = busy;
 
 	const push = useCallback((...more: HistoryItem[]) => setItems((prev) => [...prev, ...more]), []);
 	const info = useCallback((text: string, tone: 'info' | 'warning' | 'error' = 'info') => push({ key: key(), kind: 'info', text, tone }), [push]);
@@ -233,6 +237,25 @@ function Main({ config, setConfig, overrides, warnings, version, cwd, start, cle
 		else if (start.kind === 'new') begin();
 		// For 'pick', begin() runs after the user chooses.
 	}, []);
+
+	/** Print the whole history again, e.g. in new theme colours. */
+	const redrawHistory = useCallback(() => {
+		recolorPendingRef.current = false;
+		clearScreen();
+		setStaticKey((k) => k + 1);
+	}, [clearScreen]);
+
+	// Follow Omarchy theme changes: new colours apply right away, and the history is redrawn in them.
+	useEffect(() => {
+		if (config.ui.theme !== 'omarchy') return;
+		return watchOmarchyTheme(() => {
+			const colors = loadConfig(cwd).config.ui.colors;
+			setConfig({ ...config, ui: { ...config.ui, colors } });
+			// Redrawing while Jane is replying would tear the screen; wait for the turn to end.
+			if (busyRef.current) recolorPendingRef.current = true;
+			else redrawHistory();
+		});
+	}, [config, cwd]);
 
 	// While Jane works: move streamed text from the ref to the screen, and animate the spinner.
 	useEffect(() => {
@@ -320,6 +343,7 @@ function Main({ config, setConfig, overrides, warnings, version, cwd, start, cle
 			setRunning([]);
 			setPermission(null);
 			setBusy(false);
+			if (recolorPendingRef.current) redrawHistory();
 		}
 	};
 
