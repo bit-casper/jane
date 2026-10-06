@@ -32,6 +32,15 @@ function renderer(color: string, accent: string, width: number): Marked {
 		);
 		// Keep single line breaks: in a terminal, a line break the model wrote is meant (poems, lists of lines, addresses).
 		marked.use({ breaks: true });
+		// Text in list items can still hold **bold**, `code` and links; marked-terminal prints it as is.
+		// Render those parts too, and leave plain text to marked-terminal (returning false falls back to it).
+		marked.use({
+			renderer: {
+				text(token) {
+					return 'tokens' in token && token.tokens?.length ? this.parser.parseInline(token.tokens) : false;
+				},
+			},
+		});
 		cache.set(key, marked);
 	}
 	return marked;
