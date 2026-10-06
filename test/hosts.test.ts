@@ -180,3 +180,32 @@ describe('failover in the agent', () => {
 		await expect(agent.run('hello', { askPermission: async () => ({ kind: 'yes' }) }, new AbortController().signal)).rejects.toThrow(/can't reach/);
 	});
 });
+
+describe('telling the model where it runs', () => {
+	it('names the model, the host and the other hosts with their last status', async () => {
+		const { hostsPromptSection } = await import('../src/hosts.js');
+		const up = { home: true, local: true };
+		const manager = new HostManager(
+			[host('home', { baseUrl: 'http://192.168.86.24:8080/v1', model: 'big-q4', contextWindow: 131072 }), host('local', { model: 'small', contextWindow: 65536 })],
+			async (h) => (up[h.name as 'home'] ? { ok: true, models: [] } : { ok: false, reason: 'not reachable' }),
+		);
+		await manager.start();
+		expect(hostsPromptSection(manager)).toBe(
+			[
+				'# Where you run',
+				'- You are the model big-q4 on the host "home" (192.168.86.24:8080), 128k context.',
+				'- Other hosts Jane can use (the user switches with /host):',
+				'  - local: small on this computer ("local"), 64k context (reachable at the last check)',
+			].join('\n'),
+		);
+		up.home = false;
+		await manager.failover();
+		expect(hostsPromptSection(manager)).toMatch(/You are the model small on this computer \("local"\), 64k context\.[\s\S]*home: big-q4 on the host "home" \(192\.168\.86\.24:8080\), 128k context \(not reachable at the last check: stopped answering\)/);
+	});
+
+	it('says so when there are no other hosts', async () => {
+		const { hostsPromptSection } = await import('../src/hosts.js');
+		const manager = new HostManager([host('local', { model: 'small' })]);
+		expect(hostsPromptSection(manager)).toBe('# Where you run\n- You are the model small on this computer ("local"), 64k context.\n- There are no other hosts.');
+	});
+});
