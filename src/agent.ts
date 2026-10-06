@@ -51,8 +51,23 @@ function estimateMessages(messages: ChatMessage[]): number {
 
 /** A user message without the notes Jane added in front of it. */
 export function stripNotes(content: string): string {
-	return content.replace(/^(\[Note from Jane: [^\n]*\]\n)+\n/, '');
+	return content.replace(/^(?=\[Note from Jane: |\[Context from hooks\])(\[Note from Jane: [^\n]*\]\n)*(\[Context from hooks\]\n[\s\S]*?\n\[End of context from hooks\]\n)?\n/, '');
 }
+
+/** What the user's message carries in front of it: Jane's notes, then context from hooks. */
+export function withNotes(prompt: string, notes: string[], context: string[] = []): string {
+	let head = notes.map((n) => `[Note from Jane: ${n}]\n`).join('');
+	if (context.length) head += `[Context from hooks]\n${context.join('\n\n')}\n[End of context from hooks]\n`;
+	return head ? `${head}\n${prompt}` : prompt;
+}
+
+/** What the agent asks the user's hooks around a tool call. */
+export type ToolHooks = {
+	/** Return a reason to stop the tool from running. */
+	before(call: { name: string; args: Record<string, unknown>; label: string }): Promise<string | undefined>;
+	/** Return a message for the model about the result (e.g. lint errors). */
+	after(call: { name: string; args: Record<string, unknown>; label: string; result: ToolResult }): Promise<string | undefined>;
+};
 
 export class Agent {
 	/** Tools the user said yes to for the rest of the session. */
@@ -147,6 +162,11 @@ export class Agent {
 		}
 	}
 
+	/** The user's hooks, asked before and after each tool call. */
+	hooks?: ToolHooks;
+	/** Context from prompt_submit hooks, sent in front of the next user message. */
+	readonly hookContext: string[] = [];
+
 	/** Called at the start of every turn, e.g. to pick up an edited system prompt. */
 	beforeTurn?: () => void;
 
@@ -154,8 +174,7 @@ export class Agent {
 	async run(prompt: string, events: AgentEvents, signal: AbortSignal): Promise<TurnOutcome> {
 		this.beforeTurn?.();
 		this.currentPrompt = prompt;
-		const notes = this.notes.splice(0);
-		const content = notes.length ? `${notes.map((n) => `[Note from Jane: ${n}]`).join('\n')}\n\n${prompt}` : prompt;
+		const content = withNotes(prompt, this.notes.splice(0), this.hookContext.splice(0));
 		// Compact before adding the new prompt, so the prompt itself stays word for word.
 		if (this.needsCompacting(Math.ceil(content.length / 4))) {
 			await this.autoCompact(events, signal);
@@ -284,6 +303,14 @@ export class Agent {
 			};
 		}
 
+		// The user's own checks come before asking for permission, so a refused call never bothers them.
+		const refusal = await this.hooks?.before({ name, args, label });
+		if (refusal) {
+			events.onToolStart?.({ id: call.id, name, label });
+			finish(label, { output: '', isError: true, display: { summary: `Blocked by a hook: ${refusal.split('\n')[0]}` } });
+			return { output: `Error: a hook set up by the user blocked this, so it did not run. The hook said: ${refusal}` };
+		}
+
 		if (tool.needsPermission && this.mode === 'always-ask' && !this.allowedForSession.has(tool.name)) {
 			let preview: ToolDisplay = {};
 			try {
@@ -333,6 +360,8 @@ export class Agent {
 			if (result.isError) this.checkpoints!.discard(checkpoint);
 			else this.checkpoints!.commit(checkpoint);
 		}
-		return { output: finish(label, result) };
+		const feedback = await this.hooks?.after({ name, args, label, result });
+		const output = finish(label, result);
+		return { output: feedback ? `${output}\n\n[A hook set up by the user says:]\n${feedback}` : output };
 	}
 }

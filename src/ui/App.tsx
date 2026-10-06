@@ -10,11 +10,12 @@ import { type Change, Checkpoints } from '../checkpoints.js';
 import { isSummary } from '../compact.js';
 import { compileBlockList } from '../blocklist.js';
 import { type Host, type HostManager, LOCAL_HOST, describeHost, probe } from '../hosts.js';
+import { type Hook, type HookEvent, type HookPayload, type HookRun, blockMessage, hookProblem, isTrusted, runHooks, shortCommand, trust } from '../hooks.js';
 import { log } from '../log.js';
 import { watchOmarchyTheme } from '../omarchy.js';
 import { configDir, tildify } from '../paths.js';
 import { DEFAULT_BASE, type PromptBase, builtinChangedSince, initPromptFile, loadPromptBase, markBuiltinSeen, promptFileChanged, readBaseCopy, resolvePromptFile, systemPrompt } from '../prompt.js';
-import { makeDiff } from '../tools/types.js';
+import { makeDiff, resolvePath } from '../tools/types.js';
 import { saveSetting } from '../settings.js';
 import { type SessionSummary, Session, type ToolDisplayRecord, loadSession } from '../session.js';
 import { type Skill, discoverSkills, skillContent, skillDirs, skillMessage, skillsPrompt, typedText } from '../skills.js';
@@ -36,6 +37,7 @@ import { Input, type Suggestion } from './Input.js';
 import { PermissionPrompt } from './PermissionPrompt.js';
 import { ResumePicker } from './ResumePicker.js';
 import { SettingsMenu } from './SettingsMenu.js';
+import { TrustHooksPrompt } from './TrustHooksPrompt.js';
 import { UndoPicker } from './UndoPicker.js';
 import { renderMarkdown } from './markdown.js';
 import { ThemeContext, useColors } from './theme.js';
@@ -76,6 +78,7 @@ const COMMANDS: Suggestion[] = [
 	{ name: 'undo', description: 'Undo file changes Jane made' },
 	{ name: 'compact', description: 'Summarise the conversation to free up context' },
 	{ name: 'host', description: 'Show or switch the machine Jane uses' },
+	{ name: 'hooks', description: 'List your hooks' },
 	{ name: 'help', description: 'Commands and keys' },
 	{ name: 'exit', description: 'Quit Jane' },
 ];
@@ -93,6 +96,7 @@ const HELP = `Commands
   /undo               Undo file changes Jane made
   /compact [focus]    Summarise the conversation to free up context
   /host [name]        Show the hosts, or switch to one
+  /hooks              List your hooks (/hooks allow turns on this project's)
   /help               Show this help
   /exit               Quit
 
@@ -209,6 +213,10 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 	const [panel, setPanel] = useState<'settings' | null>(null);
 	const overridesRef = useRef<Overrides>({ ...overrides });
 	const [undoList, setUndoList] = useState<Change[] | null>(null);
+	/** A project's hooks waiting for the user's OK. */
+	const [askTrust, setAskTrust] = useState<Hook[] | null>(null);
+	/** The hooks that run: the user's, plus the project's once allowed. */
+	const hooksRef = useRef<Hook[]>([]);
 	const [compacting, setCompacting] = useState(false);
 
 	const agentRef = useRef<Agent | null>(null);
@@ -265,6 +273,19 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 			agent.contextWindow = host.contextWindow;
 			agent.autoCompactPercent = config.compact.auto ? config.compact.at_percent : 0;
 			agent.failover = failover;
+			agent.hooks = {
+				async before(call) {
+					const runs = await hookRuns('before_tool', toolPayload(call), { stopOnBlock: true });
+					const blocked = runs.find((r) => r.exitCode === 2);
+					return blocked ? blockMessage(blocked) : undefined;
+				},
+				async after(call) {
+					const runs = await hookRuns('after_tool', { ...toolPayload(call), result: { output: call.result.output, isError: Boolean(call.result.isError) } });
+					const messages = runs.filter((r) => r.exitCode === 2).map((r) => blockMessage(r));
+					for (const r of runs.filter((r) => r.exitCode === 2)) info(`Hook "${shortCommand(r.hook.command)}" told Jane: ${blockMessage(r).split('\n')[0]}`);
+					return messages.length ? messages.join('\n\n') : undefined;
+				},
+			};
 			agent.beforeTurn = () => {
 				// Pick up edits to the custom prompt file before each message.
 				if (!promptFileChanged(promptBaseRef.current)) return;
@@ -307,6 +328,13 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 				head.push({ key: key(), kind: 'info', text: `Resumed session from ${resume.updated.toLocaleString()}` });
 			}
 			setItems(head);
+
+			const userHooks = config.hooks.filter((h) => h.source === 'user');
+			const projectHooks = config.hooks.filter((h) => h.source === 'project');
+			const allowed = projectHooks.length > 0 && isTrusted(cwd, projectHooks);
+			hooksRef.current = allowed ? config.hooks : userHooks;
+			setAskTrust(projectHooks.length > 0 && !allowed ? projectHooks : null);
+			void fireHooks('session_start', {});
 		},
 		[config, cwd, warnings],
 	);
@@ -354,9 +382,10 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 		}
 	};
 
-	const quit = () => {
+	const quit = async () => {
 		const agent = agentRef.current;
 		onExit({ sessionId: agent?.session.id, started: Boolean(agent?.messages.length) });
+		await fireHooks('session_end', {});
 		exit();
 	};
 
@@ -412,6 +441,7 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 			},
 			onNotice: info,
 			askPermission(request) {
+				void fireHooks('waiting', { tool: request.tool.name });
 				return new Promise((resolve) => setPermission({ request, resolve }));
 			},
 		};
@@ -436,7 +466,22 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 
 	const runPrompt = async (prompt: string) => {
 		const agent = agentRef.current!;
-		const outcome = await work((events, signal) => agent.run(prompt, events, signal));
+		const outcome = await work(async (events, signal) => {
+			const runs = await hookRuns('prompt_submit', { prompt }, { stopOnBlock: true });
+			const blocked = runs.find((r) => r.exitCode === 2);
+			if (blocked) {
+				info(`A hook stopped this message from being sent: ${blockMessage(blocked)}`, 'warning');
+				return 'blocked' as const;
+			}
+			for (const r of runs) {
+				if (r.exitCode === 0 && r.stdout) {
+					agent.hookContext.push(r.stdout);
+					info(`Hook "${shortCommand(r.hook.command)}" added context to your message.`);
+				}
+			}
+			return agent.run(prompt, events, signal);
+		});
+		if (outcome !== 'blocked') void fireHooks('turn_end', {});
 		if (outcome === 'interrupted') flushLive(true);
 		else if (outcome === 'too-many-bad-calls') {
 			info(`Jane stopped: the model made ${MAX_BAD_CALLS} bad tool calls in a row. Try rephrasing, or check the model server.`, 'error');
@@ -461,6 +506,27 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 			case 'help':
 				info(HELP);
 				return;
+			case 'hooks': {
+				const projectHooks = config.hooks.filter((h) => h.source === 'project');
+				if (arg === 'allow') {
+					if (!projectHooks.length) info('This project has no hooks of its own.');
+					else if (hooksRef.current.some((h) => h.source === 'project')) info("This project's hooks are already on.");
+					else setAskTrust(projectHooks);
+					return;
+				}
+				if (!config.hooks.length) {
+					info('No hooks yet. Add them as [[hooks]] in ~/.config/jane/config.toml; see the README for examples.');
+					return;
+				}
+				const on = new Set(hooksRef.current);
+				const lines = config.hooks.map((h) => {
+					const state = on.has(h) ? '' : '  (off: not allowed yet, /hooks allow)';
+					const tools = h.tools.length ? ` [${h.tools.join(', ')}]` : '';
+					return `  ${h.event.padEnd(14)} ${h.source.padEnd(8)} ${h.command}${tools}${state}`;
+				});
+				info(`Hooks (event, from, command):\n${lines.join('\n')}`);
+				return;
+			}
 			case 'compact': {
 				if (agent.messages.length === 0) {
 					info('Nothing to compact yet.');
@@ -656,6 +722,41 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 		void runPrompt(text);
 	};
 
+	/** Run the hooks for an event and tell the user about any that failed. */
+	async function hookRuns(event: HookEvent, payload: HookPayload, options: { stopOnBlock?: boolean } = {}): Promise<HookRun[]> {
+		const hooks = hooksRef.current;
+		if (!hooks.some((h) => h.event === event)) return [];
+		const runs = await runHooks(hooks, event, payload, { cwd, sessionId: agentRef.current?.session.id ?? '' }, options);
+		for (const run of runs) {
+			const problem = hookProblem(run);
+			if (problem) info(problem, 'warning');
+		}
+		return runs;
+	}
+
+	/** Run hooks that only need to happen, without waiting for them (notifications and the like). */
+	function fireHooks(event: HookEvent, payload: HookPayload): Promise<unknown> {
+		return hookRuns(event, payload).catch((error) => log(`${event} hooks failed`, error));
+	}
+
+	function toolPayload(call: { name: string; args: Record<string, unknown> }): HookPayload {
+		const file = typeof call.args['path'] === 'string' && ['read', 'write', 'edit'].includes(call.name) ? resolvePath(cwd, call.args['path']) : undefined;
+		return { tool: call.name, args: call.args, file };
+	}
+
+	/** The user answered the question about this project's hooks. */
+	function decideTrust(allow: boolean) {
+		const projectHooks = askTrust ?? [];
+		setAskTrust(null);
+		if (!allow) {
+			info("This project's hooks are off for now. /hooks allow turns them on.");
+			return;
+		}
+		trust(cwd, projectHooks);
+		hooksRef.current = [...hooksRef.current.filter((h) => h.source === 'user'), ...projectHooks];
+		info(`Allowed ${projectHooks.length === 1 ? "this project's hook" : `this project's ${projectHooks.length} hooks`}. Jane asks again if they change.`);
+	}
+
 	/** Put the system prompt back together from its parts: base, environment, skills, instruction files. */
 	function rebuildSystem() {
 		const agent = agentRef.current;
@@ -763,7 +864,7 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 	};
 
 	useInput((char, k) => {
-		if (phase !== 'chat' || panel || undoList) return;
+		if (phase !== 'chat' || panel || undoList || askTrust) return;
 		if (k.ctrl && char === 'c') {
 			if (busy) {
 				abortRef.current?.abort();
@@ -878,10 +979,11 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 			{panel === 'settings' && (
 				<SettingsMenu cwd={cwd} config={config} height={rows} onSaved={(s) => settingSaved(s.key)} onClose={() => setPanel(null)} />
 			)}
+			{askTrust && <TrustHooksPrompt hooks={askTrust} project={tildify(cwd)} onDecide={decideTrust} />}
 			{undoList && agentRef.current?.checkpoints && (
 				<UndoPicker changes={undoList} checkpoints={agentRef.current.checkpoints} cwd={cwd} height={rows} onDone={undoFinished} />
 			)}
-			{!permission && !panel && !undoList && <Input
+			{!permission && !panel && !undoList && !askTrust && <Input
 				value={input}
 				onChange={setInput}
 				onSubmit={submit}

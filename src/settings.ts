@@ -69,6 +69,10 @@ export const SETTINGS: Setting[] = [
 		description: 'Which skill folders to load, comma-separated: jane (~/.config/jane/skills, .jane/skills), claude (~/.claude/skills, .claude/skills), omarchy.',
 	},
 	{ key: 'skills.extra_dirs', section: 'Skills', label: 'Extra folders', type: 'list', allowEmpty: true, appliesWhen: 'new sessions (/clear)', description: 'More folders with skills in them, comma-separated.' },
+	{
+		key: 'hooks', section: 'Safety', label: 'Hooks', type: 'readonly', unit: 'hook', noReset: true,
+		description: 'Commands Jane runs at certain moments (after an edit, before a tool, when she\'s done…). Add them as [[hooks]] in the config file; /hooks lists them.',
+	},
 	{ key: 'checkpoints.enabled', section: 'Safety', label: 'Undo copies', type: 'boolean', description: 'Save a copy of each file before Jane writes or edits it, so /undo can put it back.' },
 	{ key: 'block_list.enabled', section: 'Safety', label: 'Block list', type: 'boolean', description: 'Refuse dangerous bash commands (rm -rf ~, mkfs, dd onto a disk…) in every permission mode.' },
 	{ key: 'block_list.patterns', section: 'Safety', label: 'Block patterns', type: 'readonly', unit: 'pattern', description: 'The regular expressions for blocked commands. Edit them in the config file; r resets them to the built-in list.' },

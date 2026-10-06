@@ -53,7 +53,7 @@ jane --host home     # use this host instead of the first one that answers
 | Shift+Tab | Switch permission mode |
 | Ctrl+C | Clear the input, or press twice to quit |
 
-Commands: `/clear`, `/model [name]`, `/permissions [mode]`, `/settings`, `/skills`, `/<skill> [request]`, `/prompt [init|diff]`, `/undo`, `/compact [focus]`, `/host [name]`, `/help`, `/exit`.
+Commands: `/clear`, `/model [name]`, `/permissions [mode]`, `/settings`, `/skills`, `/<skill> [request]`, `/prompt [init|diff]`, `/undo`, `/compact [focus]`, `/host [name]`, `/hooks [allow]`, `/help`, `/exit`.
 
 ### Permission modes
 
@@ -104,6 +104,73 @@ api_key = "…"                 # the key the server was started with (--api-key
 - Jane only needs a URL. How it's reached (home network, Tailscale, a VPN) is
   up to you. To set up the other machine, see
   [Connecting a model on another machine](#connecting-a-model-on-another-machine).
+
+### Hooks
+
+Hooks are your own commands that Jane runs at certain moments. Add them as
+`[[hooks]]` in `~/.config/jane/config.toml`:
+
+| Event | When | Exit code 2 |
+|---|---|---|
+| `before_tool` | before a tool runs | the tool doesn't run; the hook's message goes to the model |
+| `after_tool` | after a tool ran | the hook's message goes to the model (e.g. lint errors) |
+| `prompt_submit` | when you send a message | the message isn't sent. Anything the hook prints (exit 0) is added to your message as context |
+| `turn_end` | Jane finished replying | |
+| `waiting` | Jane is waiting for your permission | |
+| `session_start`, `session_end` | Jane starts or quits | |
+
+A hook gets the details as JSON on stdin (`event`, `tool_name`, `tool_input`,
+`tool_result`, `prompt`, `cwd`, `session_id`) and as variables: `$JANE_EVENT`,
+`$JANE_TOOL`, `$JANE_FILE` (for read, write and edit), `$JANE_COMMAND` (for
+bash), `$JANE_PROJECT_DIR` and `$JANE_SESSION_ID`. It runs in the project
+folder with bash. Exit code 0 means fine, 2 blocks or talks to the model (see
+the table), and anything else, or running past `timeout` (60 seconds by
+default), is shown to you as a warning. This is the same style as Claude
+Code's hooks, so scripts are easy to adapt.
+
+```toml
+# Format files after Jane changes them.
+[[hooks]]
+event = "after_tool"
+tools = ["write", "edit"]
+command = 'npx prettier --write "$JANE_FILE" >/dev/null'
+
+# Show lint problems to the model, so it fixes them.
+[[hooks]]
+event = "after_tool"
+tools = ["write", "edit"]
+command = 'npx eslint "$JANE_FILE" >&2 || exit 2'
+
+# A desktop notification when Jane is done or needs you.
+[[hooks]]
+event = "turn_end"
+command = 'notify-send "Jane" "Done"'
+
+[[hooks]]
+event = "waiting"
+command = 'notify-send "Jane" "Waiting for your permission ($JANE_TOOL)"'
+
+# Never push from Jane.
+[[hooks]]
+event = "before_tool"
+tools = ["bash"]
+command = 'case "$JANE_COMMAND" in *"git push"*) echo "Pushing is not allowed; ask the user to push." >&2; exit 2;; esac'
+
+# Tell Jane which branch you're on with every message.
+[[hooks]]
+event = "prompt_submit"
+command = 'echo "Current git branch: $(git branch --show-current 2>/dev/null)"'
+```
+
+For tools, the block list is checked first, then `before_tool` hooks, then
+the permission prompt, so a hook can refuse before you're asked.
+
+**Project hooks.** A project's `.jane/config.toml` can define hooks too. Since
+those would run someone else's commands on your computer, Jane shows them and
+asks before running them, and remembers your answer for that project. If the
+project's hooks change (say, after a `git pull`), Jane asks again. `/hooks`
+lists all hooks and whether they're on; `/hooks allow` turns on a project's
+hooks after you said "not now".
 
 ### Undo
 
@@ -224,6 +291,10 @@ base_url = "http://192.168.86.42:8080/v1"
 model = "qwen3.6-abliterated-q4"
 context_window = 131072
 api_key = ""
+
+[[hooks]]                     # your own commands at certain moments (see Hooks)
+event = "turn_end"
+command = 'notify-send "Jane" "Done"'
 
 [checkpoints]
 enabled = true                # save a copy before each write/edit, for /undo

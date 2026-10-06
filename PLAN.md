@@ -208,7 +208,7 @@ Next:
    `prompt.file` setting, while Jane still adds the parts tools and skills
    depend on (environment, skills list, `JANE.md`). Plus `/prompt` to show
    the full prompt the model actually gets.
-10. **Hooks**: run your own scripts before or after tool calls and at session
+10. ✅ **Hooks**: run your own scripts before or after tool calls and at session
    start and end
 11. **MCP servers**: use external tool servers
 12. **Sub-agents**: let Jane hand tasks to helper agents that work in the

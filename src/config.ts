@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import { parse } from 'smol-toml';
+import { HOOK_EVENTS, type Hook, type HookEvent } from './hooks.js';
 import { readOmarchyColors } from './omarchy.js';
 import { DEFAULT_BLOCK_PATTERNS, compileBlockList } from './blocklist.js';
 import { projectConfigFile, userConfigFile } from './paths.js';
@@ -51,6 +52,8 @@ export type Config = {
 	};
 	/** Other machines to use instead of [model] when they're reachable, in order of preference. */
 	hosts: HostConfig[];
+	/** Commands Jane runs at certain moments. From the user config and, once allowed, the project's. */
+	hooks: Hook[];
 	block_list: {
 		/** Refuse bash commands matching these patterns, in every permission mode. */
 		enabled: boolean;
@@ -100,6 +103,7 @@ export const defaultConfig: Config = {
 		at_percent: 80,
 	},
 	hosts: [],
+	hooks: [],
 	block_list: {
 		enabled: true,
 		patterns: DEFAULT_BLOCK_PATTERNS,
@@ -153,6 +157,31 @@ function merge(base: Plain, override: Plain, where: string, warnings: string[]):
 		}
 	}
 	return out;
+}
+
+/** Check [[hooks]] entries; broken ones are skipped with a warning. */
+function parseHooks(value: unknown, source: Hook['source'], warnings: string[]): Hook[] {
+	if (!Array.isArray(value)) {
+		warnings.push('"hooks" should be a list of [[hooks]] tables');
+		return [];
+	}
+	const hooks: Hook[] = [];
+	value.forEach((entry, i) => {
+		const where = `hooks #${i + 1}`;
+		if (!isPlain(entry)) return warnings.push(`${where} should be a table`);
+		const { event, command, tools = [], timeout = 60 } = entry as Record<string, unknown>;
+		const problems: string[] = [];
+		if (typeof event !== 'string' || !(HOOK_EVENTS as readonly string[]).includes(event)) problems.push(`event (one of ${HOOK_EVENTS.join(', ')})`);
+		if (typeof command !== 'string' || !command.trim()) problems.push('command');
+		if (!Array.isArray(tools) || !tools.every((t) => typeof t === 'string')) problems.push('tools (a list of tool names)');
+		if (typeof timeout !== 'number' || timeout <= 0) problems.push('timeout (seconds)');
+		for (const key of Object.keys(entry)) {
+			if (!['event', 'command', 'tools', 'timeout'].includes(key)) warnings.push(`${where}: unknown setting "${key}"`);
+		}
+		if (problems.length) return warnings.push(`${where} was skipped: it needs ${problems.join(', ')}`);
+		hooks.push({ event: event as HookEvent, command: command as string, tools: tools as string[], timeout: timeout as number, source });
+	});
+	return hooks;
 }
 
 /** Check [[hosts]] entries; broken ones are skipped with a warning. */
@@ -238,7 +267,8 @@ export function loadConfig(
 	const warnings: string[] = [];
 	const setColors = new Set<string>();
 	let merged: Plain = structuredClone(defaultConfig) as unknown as Plain;
-	for (const file of files) {
+	const hooks: Hook[] = [];
+	for (const [index, file] of files.entries()) {
 		let text: string;
 		try {
 			text = fs.readFileSync(file, 'utf8');
@@ -248,6 +278,11 @@ export function loadConfig(
 		try {
 			const fileWarnings: string[] = [];
 			const data = parse(text) as Plain;
+			// Hooks add up (user's first, then the project's) instead of the project replacing them.
+			if ('hooks' in data) {
+				hooks.push(...parseHooks(data['hooks'], index === 0 ? 'user' : 'project', fileWarnings));
+				delete data['hooks'];
+			}
 			merged = merge(merged, data, '', fileWarnings);
 			const colors = isPlain(data['ui']) && isPlain(data['ui']['colors']) ? data['ui']['colors'] : {};
 			for (const key of Object.keys(colors)) setColors.add(key);
@@ -257,6 +292,7 @@ export function loadConfig(
 		}
 	}
 	const config = merged as unknown as Config;
+	config.hooks = hooks;
 	validate(config, warnings);
 	const themed: LoadedConfig['themed'] = [];
 	if (config.ui.theme === 'omarchy') {
