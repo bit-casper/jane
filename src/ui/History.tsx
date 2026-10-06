@@ -11,6 +11,7 @@ export type HistoryItem = { key: string } & (
 	| { kind: 'thinking'; text: string; seconds?: number }
 	| { kind: 'tool'; name: string; label: string; result: ToolResult }
 	| { kind: 'info'; text: string; tone?: 'info' | 'warning' | 'error' }
+	| { kind: 'diff'; title: string; lines: DiffLine[]; note?: string }
 );
 
 export function toolTitle(name: string): string {
@@ -171,6 +172,17 @@ export function InfoMessage({ text, tone = 'info' }: { text: string; tone?: 'inf
 			<Text color={color} dimColor={tone === 'info'}>
 				{text}
 			</Text>
+		</Box>
+	);
+}
+
+/** A titled diff, e.g. from /prompt diff. */
+export function DiffMessage({ title, lines, note }: { title: string; lines: DiffLine[]; note?: string }) {
+	return (
+		<Box flexDirection="column" marginBottom={1}>
+			<Text bold>{title}</Text>
+			{lines.length ? <DiffView lines={lines} maxLines={400} /> : <Text dimColor>(no differences)</Text>}
+			{note ? <Text dimColor>{note}</Text> : null}
 		</Box>
 	);
 }

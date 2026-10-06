@@ -53,7 +53,7 @@ jane --host home     # use this host instead of the first one that answers
 | Shift+Tab | Switch permission mode |
 | Ctrl+C | Clear the input, or press twice to quit |
 
-Commands: `/clear`, `/model [name]`, `/permissions [mode]`, `/settings`, `/skills`, `/<skill> [request]`, `/prompt [init]`, `/undo`, `/compact [focus]`, `/host [name]`, `/help`, `/exit`.
+Commands: `/clear`, `/model [name]`, `/permissions [mode]`, `/settings`, `/skills`, `/<skill> [request]`, `/prompt [init|diff]`, `/undo`, `/compact [focus]`, `/host [name]`, `/help`, `/exit`.
 
 ### Permission modes
 
@@ -132,17 +132,32 @@ so Jane can also read `AGENTS.md` or `CLAUDE.md`.
 
 ### Your own system prompt
 
-Jane's built-in instructions (who she is and how she works) can be replaced
-with your own. `/prompt init` writes them to `~/.config/jane/system.md` as a
-starting point and sets `prompt.file` to that file; edit it in any editor, and
-the changes apply from your next message. `/prompt` shows the full prompt the
-model gets, and which parts it's made of.
+There are two ways to shape how Jane works:
+
+- **`JANE.md` adds** instructions: your preferences, conventions and project
+  rules (see [Project instructions](#project-instructions)). This is what you
+  want most of the time.
+- **`prompt.file` replaces** Jane's built-in instructions, meaning who she is
+  and how she works. Use it when the built-in text doesn't suit the model
+  you run (local models respond differently to the same wording), or for a
+  different personality.
+
+`/prompt init` writes the built-in instructions to `~/.config/jane/system.md`
+as a starting point and sets `prompt.file` to that file. Edit it in any
+editor; the changes apply from your next message. `/prompt` shows the full
+prompt the model gets, and which parts it's made of.
 
 Only that first part is replaced: Jane still adds the environment (working
 directory, date, platform), the skills list and your `JANE.md` after it, so
 tools and skills keep working. Instructions in `JANE.md` still apply, so keep
 the two from contradicting each other. To go back to the built-in prompt,
 reset *System prompt* in `/settings`.
+
+Your file is a copy, so later improvements to Jane's built-in prompt don't
+reach it by themselves. `/prompt init` also keeps the text it started from
+(`system.md.base`); when Jane's built-in prompt changes, Jane says so once at
+startup. `/prompt diff` then shows what changed in the built-in prompt since
+you made your file, and how your prompt differs from the current built-in one.
 
 ### Skills
 

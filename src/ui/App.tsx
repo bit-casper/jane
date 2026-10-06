@@ -13,7 +13,8 @@ import { type Host, type HostManager, LOCAL_HOST, describeHost, probe } from '..
 import { log } from '../log.js';
 import { watchOmarchyTheme } from '../omarchy.js';
 import { configDir, tildify } from '../paths.js';
-import { DEFAULT_BASE, type PromptBase, loadPromptBase, promptFileChanged, resolvePromptFile, systemPrompt } from '../prompt.js';
+import { DEFAULT_BASE, type PromptBase, builtinChangedSince, initPromptFile, loadPromptBase, markBuiltinSeen, promptFileChanged, readBaseCopy, resolvePromptFile, systemPrompt } from '../prompt.js';
+import { makeDiff } from '../tools/types.js';
 import { saveSetting } from '../settings.js';
 import { type SessionSummary, Session, type ToolDisplayRecord, loadSession } from '../session.js';
 import { type Skill, discoverSkills, skillContent, skillDirs, skillMessage, skillsPrompt, typedText } from '../skills.js';
@@ -23,6 +24,7 @@ import { Banner } from './Banner.js';
 import * as ed from './editor.js';
 import {
 	AssistantMessage,
+	DiffMessage,
 	type HistoryItem,
 	InfoMessage,
 	Thinking,
@@ -86,6 +88,7 @@ const HELP = `Commands
   /skills             List the skills Jane can use
   /prompt             Show the full system prompt the model gets
   /prompt init        Make ~/.config/jane/system.md to write your own
+  /prompt diff        Compare your prompt with Jane's built-in one
   /<skill> [request]  Run a skill, e.g. /omarchy change the gaps
   /undo               Undo file changes Jane made
   /compact [focus]    Summarise the conversation to free up context
@@ -284,7 +287,17 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 			}
 			const base = promptBaseRef.current;
 			if (base.warning) head.push({ key: key(), kind: 'info', text: base.warning, tone: 'warning' });
-			else if (base.file) head.push({ key: key(), kind: 'info', text: `System prompt from ${tildify(base.file)}` });
+			else if (base.file) {
+				head.push({ key: key(), kind: 'info', text: `System prompt from ${tildify(base.file)}` });
+				if (builtinChangedSince(base.file)) {
+					head.push({
+						key: key(),
+						kind: 'info',
+						tone: 'warning',
+						text: `Jane's built-in prompt has changed since you made ${tildify(base.file)}. /prompt diff shows what changed, so you can copy over what you want.`,
+					});
+				}
+			}
 			for (const w of found.warnings) head.push({ key: key(), kind: 'info', text: `Skills: ${w}`, tone: 'warning' });
 			if (found.skills.length) {
 				head.push({ key: key(), kind: 'info', text: `Skills: ${found.skills.map((s) => s.name).join(', ')}` });
@@ -539,12 +552,9 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 						return;
 					}
 					const file = path.join(configDir, 'system.md');
-					const existed = fs.existsSync(file);
+					let existed: boolean;
 					try {
-						if (!existed) {
-							fs.mkdirSync(configDir, { recursive: true });
-							fs.writeFileSync(file, DEFAULT_BASE + '\n');
-						}
+						existed = !initPromptFile(file).created;
 						saveSetting('user', cwd, 'prompt.file', tildify(file));
 					} catch (error) {
 						info(`Couldn't set up ${tildify(file)}: ${(error as Error).message}`, 'error');
@@ -553,12 +563,43 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 					settingSaved('prompt.file');
 					info(
 						`${existed ? 'Found' : 'Created'} ${tildify(file)}${existed ? '' : ' with the built-in prompt in it'}, and set prompt.file to it. ` +
-							'Edit it in any editor; changes apply from your next message. Jane still adds the environment, skills and JANE.md after it.',
+							'Edit it in any editor; changes apply from your next message. Jane still adds the environment, skills and JANE.md after it.' +
+							(existed ? '' : ` (${path.basename(file)}.base next to it is the built-in text it started from; Jane uses it to tell you when her built-in prompt changes.)`),
 					);
 					return;
 				}
+				if (arg === 'diff') {
+					const base = promptBaseRef.current;
+					if (!base.file) {
+						info("You're using the built-in prompt, so there's nothing to compare. /prompt init makes your own.");
+						return;
+					}
+					const shown = tildify(base.file);
+					const copy = readBaseCopy(base.file);
+					const items: HistoryItem[] = [];
+					if (copy !== undefined && builtinChangedSince(base.file)) {
+						items.push({
+							key: key(),
+							kind: 'diff',
+							title: `What changed in Jane's built-in prompt since you made ${shown}:`,
+							lines: makeDiff(copy + '\n', DEFAULT_BASE + '\n'),
+							note: "Copy over what you want; Jane won't mention these changes again.",
+						});
+						markBuiltinSeen(base.file);
+					} else if (copy !== undefined) {
+						items.push({ key: key(), kind: 'info', text: `Jane's built-in prompt hasn't changed since you made ${shown}.` });
+					}
+					items.push({
+						key: key(),
+						kind: 'diff',
+						title: `Your prompt (${shown}) compared with Jane's built-in prompt (- built-in, + yours):`,
+						lines: makeDiff(DEFAULT_BASE + '\n', base.text + '\n'),
+					});
+					push(...items);
+					return;
+				}
 				if (arg) {
-					info('Use /prompt to show the system prompt, or /prompt init to make your own.', 'error');
+					info('Use /prompt to show the system prompt, /prompt init to make your own, or /prompt diff to compare it with the built-in one.', 'error');
 					return;
 				}
 				const base = promptBaseRef.current;
@@ -799,6 +840,8 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 							return <ToolMessage key={item.key} name={item.name} label={item.label} result={item.result} />;
 						case 'info':
 							return <InfoMessage key={item.key} text={item.text} tone={item.tone} />;
+						case 'diff':
+							return <DiffMessage key={item.key} title={item.title} lines={item.lines} note={item.note} />;
 					}
 				}}
 			</Static>

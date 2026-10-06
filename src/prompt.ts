@@ -98,3 +98,40 @@ export function systemPrompt(
 	}
 	return parts.join('\n\n');
 }
+
+/** Next to a prompt file made by /prompt init: the built-in text it was copied from. */
+export function baseCopyFile(promptFile: string): string {
+	return `${promptFile}.base`;
+}
+
+/**
+ * Make a prompt file to start from (if there isn't one), holding the built-in
+ * text, and keep a copy of that text to notice later changes to the built-in prompt.
+ */
+export function initPromptFile(file: string): { created: boolean } {
+	if (fs.existsSync(file)) return { created: false };
+	fs.mkdirSync(path.dirname(file), { recursive: true });
+	fs.writeFileSync(file, DEFAULT_BASE + '\n');
+	fs.writeFileSync(baseCopyFile(file), DEFAULT_BASE + '\n');
+	return { created: true };
+}
+
+/** The built-in text a prompt file was made from, if /prompt init kept a copy. */
+export function readBaseCopy(promptFile: string): string | undefined {
+	try {
+		return fs.readFileSync(baseCopyFile(promptFile), 'utf8').trim();
+	} catch {
+		return undefined;
+	}
+}
+
+/** True if Jane's built-in prompt changed since this prompt file was made from it. */
+export function builtinChangedSince(promptFile: string): boolean {
+	const copy = readBaseCopy(promptFile);
+	return copy !== undefined && copy !== DEFAULT_BASE.trim();
+}
+
+/** Remember that the user has seen the current built-in prompt (after /prompt diff). */
+export function markBuiltinSeen(promptFile: string): void {
+	fs.writeFileSync(baseCopyFile(promptFile), DEFAULT_BASE + '\n');
+}

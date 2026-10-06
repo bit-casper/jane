@@ -80,3 +80,38 @@ describe('custom system prompt', () => {
 		expect(parseInput(setting, ' ~/.config/jane/system.md ')).toEqual({ value: '~/.config/jane/system.md' });
 	});
 });
+
+describe('keeping a custom prompt up to date', () => {
+	it('makes a prompt file and keeps a copy of the built-in text it came from', async () => {
+		const { baseCopyFile, builtinChangedSince, initPromptFile, readBaseCopy } = await import('../src/prompt.js');
+		const file = path.join(dir, 'conf', 'system.md');
+		expect(initPromptFile(file)).toEqual({ created: true });
+		expect(fs.readFileSync(file, 'utf8')).toBe(DEFAULT_BASE + '\n');
+		expect(readBaseCopy(file)).toBe(DEFAULT_BASE);
+		expect(fs.existsSync(baseCopyFile(file))).toBe(true);
+		expect(builtinChangedSince(file)).toBe(false);
+
+		fs.writeFileSync(file, 'my own prompt');
+		expect(initPromptFile(file)).toEqual({ created: false });
+		expect(fs.readFileSync(file, 'utf8')).toBe('my own prompt'); // never overwritten
+	});
+
+	it('notices when the built-in prompt changed since, until the user has seen it', async () => {
+		const { baseCopyFile, builtinChangedSince, initPromptFile, markBuiltinSeen } = await import('../src/prompt.js');
+		const file = path.join(dir, 'system.md');
+		initPromptFile(file);
+		// Simulate an older Jane: the copy holds a different built-in text.
+		fs.writeFileSync(baseCopyFile(file), 'You are Jane, an older version.\n');
+		expect(builtinChangedSince(file)).toBe(true);
+		markBuiltinSeen(file);
+		expect(builtinChangedSince(file)).toBe(false);
+	});
+
+	it("can't tell for prompt files made by hand", async () => {
+		const { builtinChangedSince, readBaseCopy } = await import('../src/prompt.js');
+		const file = path.join(dir, 'handmade.md');
+		fs.writeFileSync(file, 'x');
+		expect(readBaseCopy(file)).toBeUndefined();
+		expect(builtinChangedSince(file)).toBe(false);
+	});
+});
