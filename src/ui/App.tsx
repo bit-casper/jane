@@ -277,7 +277,8 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 	/** The prompt.file setting in effect, for reloading the file when it changes. */
 	const promptSettingRef = useRef('');
 	const busyRef = useRef(false);
-	const recolorPendingRef = useRef(false);
+	/** The history needs printing again (new theme colours, or the banner's host changed), once Jane isn't busy. */
+	const redrawPendingRef = useRef(false);
 	busyRef.current = busy;
 	const skillsRef = useRef<Skill[]>([]);
 
@@ -405,9 +406,15 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 		// For 'pick', begin() runs after the user chooses.
 	}, []);
 
+	/** Redraw the history now, or when the current turn ends: redrawing while Jane is replying would tear the screen. */
+	function redrawSoon() {
+		if (busyRef.current) redrawPendingRef.current = true;
+		else redrawHistory();
+	}
+
 	/** Print the whole history again, e.g. in new theme colours. */
 	const redrawHistory = useCallback(() => {
-		recolorPendingRef.current = false;
+		redrawPendingRef.current = false;
 		clearScreen();
 		setStaticKey((k) => k + 1);
 	}, [clearScreen]);
@@ -418,9 +425,7 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 		return watchOmarchyTheme(() => {
 			const colors = loadConfig(cwd).config.ui.colors;
 			setConfig({ ...config, ui: { ...config.ui, colors } });
-			// Redrawing while Jane is replying would tear the screen; wait for the turn to end.
-			if (busyRef.current) recolorPendingRef.current = true;
-			else redrawHistory();
+			redrawSoon();
 		});
 	}, [config, cwd]);
 
@@ -534,7 +539,7 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 			});
 			setCompacting(false);
 			setBusy(false);
-			if (recolorPendingRef.current) redrawHistory();
+			if (redrawPendingRef.current) redrawHistory();
 		}
 	};
 
@@ -735,6 +740,7 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 					agent.session.setModel(arg);
 					hosts.current.model = arg;
 					rebuildSystem();
+					redrawSoon();
 					setModel(arg);
 					info(`Model: ${arg}`);
 					return;
@@ -1011,6 +1017,8 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 		setContextWindow(host.contextWindow);
 		// Tell the model about the switch too.
 		rebuildSystem();
+		// The banner at the top is part of the printed history; print it again with the new host.
+		if (previous !== host) redrawSoon();
 	}
 
 	/** The host stopped answering: switch to the next one that does (called by the agent). */
