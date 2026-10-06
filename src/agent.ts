@@ -1,5 +1,6 @@
 import { type ChatMessage, type StreamResult, type ToolCall, streamChat } from './client.js';
 import type { PermissionMode } from './config.js';
+import type { Checkpoints } from './checkpoints.js';
 import type { Session } from './session.js';
 import { findTool, parseArgs, toolSchemas, tools } from './tools/index.js';
 import { type Tool, type ToolDisplay, ToolError, type ToolResult } from './tools/types.js';
@@ -35,11 +36,21 @@ export function estimateTokens(messages: ChatMessage[], toolList: Tool<any>[] = 
 	return Math.ceil(chars / 4);
 }
 
+/** A user message without the notes Jane added in front of it. */
+export function stripNotes(content: string): string {
+	return content.replace(/^(\[Note from Jane: [^\n]*\]\n)+\n/, '');
+}
+
 export class Agent {
 	/** Tools the user said yes to for the rest of the session. */
 	readonly allowedForSession = new Set<string>();
 	/** The tools the model can use. */
 	tools: Tool<any>[] = tools;
+	/** Where file copies are kept for /undo. Undefined turns checkpoints off. */
+	checkpoints?: Checkpoints;
+	/** Notes for the model, sent with the next user message (e.g. "the user undid these changes"). */
+	readonly notes: string[] = [];
+	private currentPrompt = '';
 
 	constructor(
 		public settings: ModelSettings,
@@ -57,7 +68,9 @@ export class Agent {
 
 	/** Run one user turn: the model replies, uses tools, and repeats until it's done. */
 	async run(prompt: string, events: AgentEvents, signal: AbortSignal): Promise<TurnOutcome> {
-		this.push({ role: 'user', content: prompt });
+		this.currentPrompt = prompt;
+		const notes = this.notes.splice(0);
+		this.push({ role: 'user', content: notes.length ? `${notes.map((n) => `[Note from Jane: ${n}]`).join('\n')}\n\n${prompt}` : prompt });
 		let badCalls = 0;
 
 		for (let step = 0; step < MAX_STEPS; step++) {
@@ -171,6 +184,16 @@ export class Agent {
 		}
 
 		events.onToolStart?.({ id: call.id, name, label });
+		let checkpoint: number | undefined;
+		const files = tool.files?.(args, { cwd: this.cwd });
+		if (files?.length && this.checkpoints) {
+			try {
+				checkpoint = this.checkpoints.capture(files, { tool: name, label, prompt: this.currentPrompt.slice(0, 120) });
+			} catch (error) {
+				// Rather not change a file we can't undo.
+				return { output: finish(label, { output: `Could not save a checkpoint before changing the file: ${(error as Error).message}`, isError: true }) };
+			}
+		}
 		let result: ToolResult;
 		try {
 			result = await tool.run(args, ctx);
@@ -178,6 +201,10 @@ export class Agent {
 			if (error instanceof ToolError) result = { output: error.message, isError: true };
 			else if (signal.aborted) result = { output: 'Interrupted by the user.', isError: true };
 			else result = { output: `Unexpected error: ${(error as Error).message}`, isError: true };
+		}
+		if (checkpoint !== undefined) {
+			if (result.isError) this.checkpoints!.discard(checkpoint);
+			else this.checkpoints!.commit(checkpoint);
 		}
 		return { output: finish(label, result) };
 	}

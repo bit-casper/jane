@@ -137,3 +137,17 @@ describe('settings for skills', () => {
 		expect(parseInput(SETTINGS.find((s) => s.key === 'instructions.filenames')!, '')).toHaveProperty('error');
 	});
 });
+
+describe('on/off settings', () => {
+	it('reads and shows on/off', () => {
+		const undo = SETTINGS.find((s) => s.key === 'checkpoints.enabled')!;
+		expect(parseInput(undo, 'off')).toEqual({ value: false });
+		expect(parseInput(undo, 'maybe')).toHaveProperty('error');
+		expect(formatValue(undo, true)).toBe('on');
+	});
+
+	it('keeps each section together', () => {
+		const sections = SETTINGS.map((s) => s.section).filter((s, i, all) => s !== all[i - 1]);
+		expect(new Set(sections).size).toBe(sections.length);
+	});
+});

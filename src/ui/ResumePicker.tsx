@@ -3,7 +3,7 @@ import { useState } from 'react';
 import type { SessionSummary } from '../session.js';
 import { useColors } from './theme.js';
 
-function ago(date: Date, now = Date.now()): string {
+export function ago(date: Date, now = Date.now()): string {
 	const s = Math.round((now - date.getTime()) / 1000);
 	if (s < 60) return 'just now';
 	const m = Math.round(s / 60);

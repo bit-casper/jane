@@ -50,6 +50,7 @@ export function SettingsMenu({ cwd, config, height, onSaved, onClose }: Props) {
 	const [version, setVersion] = useState(0);
 	const layers = useMemo(() => loadLayers(cwd), [cwd, version]);
 	const setting = SETTINGS[selected]!;
+	const choice = setting.type === 'enum' || setting.type === 'boolean';
 
 	const save = (value: unknown) => {
 		try {
@@ -65,6 +66,7 @@ export function SettingsMenu({ cwd, config, height, onSaved, onClose }: Props) {
 	};
 
 	const cycle = (direction: 1 | -1) => {
+		if (setting.type === 'boolean') return save(!getValue(config, setting.key));
 		const options = setting.options!;
 		const current = options.indexOf(String(getValue(config, setting.key)));
 		save(options[(current + direction + options.length) % options.length]);
@@ -106,8 +108,8 @@ export function SettingsMenu({ cwd, config, height, onSaved, onClose }: Props) {
 		if (key.upArrow) setSelected((s) => (s + SETTINGS.length - 1) % SETTINGS.length);
 		else if (key.downArrow) setSelected((s) => (s + 1) % SETTINGS.length);
 		else if (key.tab) setScope((s) => (s === 'user' ? 'project' : 'user'));
-		else if (setting.type === 'enum' && (key.return || input === ' ' || key.rightArrow)) cycle(1);
-		else if (setting.type === 'enum' && key.leftArrow) cycle(-1);
+		else if (choice && (key.return || input === ' ' || key.rightArrow)) cycle(1);
+		else if (choice && key.leftArrow) cycle(-1);
 		else if (key.return) {
 			const text = formatValue(setting, getValue(config, setting.key), true);
 			setEditing({ text, cursor: text.length });
@@ -177,7 +179,7 @@ export function SettingsMenu({ cwd, config, height, onSaved, onClose }: Props) {
 							) : (
 								<Text>
 									{s.type === 'color' && <Text color={String(value)}>■ </Text>}
-									{s.type === 'enum' && active ? `‹ ${formatValue(s, value)} ›` : formatValue(s, value)}
+									{(s.type === 'enum' || s.type === 'boolean') && active ? `‹ ${formatValue(s, value)} ›` : formatValue(s, value)}
 									<Text dimColor>
 										{source !== 'default' ? `  (${source})` : s.type === 'color' && value !== defaultValue(s.key) ? '  (theme)' : ''}
 									</Text>
@@ -195,7 +197,7 @@ export function SettingsMenu({ cwd, config, height, onSaved, onClose }: Props) {
 			<Text dimColor>
 				{editing
 					? 'Enter to save · Esc to cancel'
-					: `↑/↓ move · ${setting.type === 'enum' ? '←/→ change' : 'Enter edit'} · Tab user/project · r reset · Esc close`}
+					: `↑/↓ move · ${choice ? '←/→ change' : 'Enter edit'} · Tab user/project · r reset · Esc close`}
 			</Text>
 		</Box>
 	);

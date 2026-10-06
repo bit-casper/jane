@@ -52,7 +52,7 @@ jane --mode unrestricted
 | Shift+Tab | Switch permission mode |
 | Ctrl+C | Clear the input, or press twice to quit |
 
-Commands: `/clear`, `/model [name]`, `/permissions [mode]`, `/settings`, `/skills`, `/<skill> [request]`, `/help`, `/exit`.
+Commands: `/clear`, `/model [name]`, `/permissions [mode]`, `/settings`, `/skills`, `/<skill> [request]`, `/undo`, `/help`, `/exit`.
 
 ### Permission modes
 
@@ -60,6 +60,15 @@ Commands: `/clear`, `/model [name]`, `/permissions [mode]`, `/settings`, `/skill
   Writing and editing files and running commands show what will happen and
   ask first.
 - **unrestricted**: Jane runs every tool without asking.
+
+### Undo
+
+Before Jane writes or edits a file, it saves a copy. `/undo` lists Jane's
+changes, newest first; pick one to undo it and every change after it. If a file
+was changed after Jane's edit (by you or a command), Jane asks before
+overwriting it. Jane also tells the model about the undo, so it doesn't redo
+the change on its own. Undo works after `--resume` too. Changes made by `bash`
+commands can't be undone. Turn it off with `checkpoints.enabled = false`.
 
 ### Project instructions
 
@@ -119,6 +128,9 @@ filenames = ["JANE.md"]       # first one found wins, e.g. ["JANE.md", "AGENTS.m
 sources = ["jane", "claude", "omarchy"]
 extra_dirs = []               # more folders with skills in them
 
+[checkpoints]
+enabled = true                # save a copy before each write/edit, for /undo
+
 [ui]
 show_thinking = "collapsed"   # "full" | "collapsed" | "hidden"
 theme = "omarchy"             # "omarchy" | "none"
@@ -154,6 +166,7 @@ over the theme. Set `ui.theme = "none"` to use only the config colours.
 | What | Where |
 |---|---|
 | Sessions | `~/.local/share/jane/sessions/` |
+| Undo copies | next to each session, in `<session>.checkpoints/` |
 | Error log | `~/.local/state/jane/jane.log` |
 
 Both follow `XDG_DATA_HOME` and `XDG_STATE_HOME` when set.
