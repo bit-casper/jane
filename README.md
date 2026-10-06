@@ -70,6 +70,16 @@ overwriting it. Jane also tells the model about the undo, so it doesn't redo
 the change on its own. Undo works after `--resume` too. Changes made by `bash`
 commands can't be undone. Turn it off with `checkpoints.enabled = false`.
 
+### Block list
+
+Some bash commands are always refused, in every permission mode: `rm -r` on
+`/` or your home folder, formatting or wiping disks (`mkfs`, `wipefs`, `dd`
+onto a disk, `shred /dev/…`), `chmod`/`chown -R` on `/`, and fork bombs. Jane
+tells the model the command was blocked and that you can run it yourself if
+it's really needed. It's a safety net against accidents, not a security
+boundary. The patterns are regular expressions in `block_list.patterns`, so
+you can add your own; turn it off with `block_list.enabled = false`.
+
 ### Project instructions
 
 Put instructions for Jane in a `JANE.md` file in your project, and/or in
@@ -130,6 +140,10 @@ extra_dirs = []               # more folders with skills in them
 
 [checkpoints]
 enabled = true                # save a copy before each write/edit, for /undo
+
+[block_list]
+enabled = true
+patterns = [ … ]              # regular expressions; the built-in ones by default
 
 [ui]
 show_thinking = "collapsed"   # "full" | "collapsed" | "hidden"

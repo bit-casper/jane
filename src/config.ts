@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import { parse } from 'smol-toml';
 import { readOmarchyColors } from './omarchy.js';
+import { DEFAULT_BLOCK_PATTERNS, compileBlockList } from './blocklist.js';
 import { projectConfigFile, userConfigFile } from './paths.js';
 
 export type PermissionMode = 'always-ask' | 'unrestricted';
@@ -29,6 +30,12 @@ export type Config = {
 	checkpoints: {
 		/** Save a copy of each file before Jane changes it, for /undo. */
 		enabled: boolean;
+	};
+	block_list: {
+		/** Refuse bash commands matching these patterns, in every permission mode. */
+		enabled: boolean;
+		/** Regular expressions. */
+		patterns: string[];
 	};
 	ui: {
 		show_thinking: ThinkingDisplay;
@@ -64,6 +71,10 @@ export const defaultConfig: Config = {
 	},
 	checkpoints: {
 		enabled: true,
+	},
+	block_list: {
+		enabled: true,
+		patterns: DEFAULT_BLOCK_PATTERNS,
 	},
 	ui: {
 		show_thinking: 'collapsed',
@@ -132,6 +143,7 @@ function validate(config: Config, warnings: string[]): void {
 		warnings.push(`skills.sources can only contain "jane", "claude" and "omarchy" (not ${unknownSources.map((s) => `"${s}"`).join(', ')})`);
 		config.skills.sources = config.skills.sources.filter((s) => !unknownSources.includes(s));
 	}
+	if (config.block_list.enabled) warnings.push(...compileBlockList(config.block_list.patterns).warnings);
 	if (config.instructions.filenames.length === 0) {
 		config.instructions.filenames = defaultConfig.instructions.filenames;
 	}

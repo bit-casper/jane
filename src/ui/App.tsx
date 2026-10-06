@@ -6,6 +6,7 @@ import { type ChatMessage, ModelError, listModels } from '../client.js';
 import { type Config, type PermissionMode, loadConfig } from '../config.js';
 import { type InstructionFile, loadInstructions } from '../instructions.js';
 import { type Change, Checkpoints } from '../checkpoints.js';
+import { compileBlockList } from '../blocklist.js';
 import { log } from '../log.js';
 import { watchOmarchyTheme } from '../omarchy.js';
 import { tildify } from '../paths.js';
@@ -228,6 +229,7 @@ function Main({ config, setConfig, overrides, warnings, version, cwd, start, cle
 			);
 			if (found.skills.some((s) => !s.userOnly)) agent.tools = [...baseTools, makeSkillTool(() => skillsRef.current)];
 			if (config.checkpoints.enabled) agent.checkpoints = new Checkpoints(session.file.replace(/\.jsonl$/, '.checkpoints'));
+			if (config.block_list.enabled) agent.blockRules = compileBlockList(config.block_list.patterns).rules;
 			agentRef.current = agent;
 			setModeState(startMode);
 			setModel(agent.settings.model);
@@ -488,6 +490,9 @@ function Main({ config, setConfig, overrides, warnings, version, cwd, start, cle
 			}
 			if (key === 'checkpoints.enabled') {
 				agent.checkpoints = next.checkpoints.enabled ? new Checkpoints(agent.session.file.replace(/\.jsonl$/, '.checkpoints')) : undefined;
+			}
+			if (key.startsWith('block_list.')) {
+				agent.blockRules = next.block_list.enabled ? compileBlockList(next.block_list.patterns).rules : [];
 			}
 			if (key === 'instructions.filenames') {
 				const instructions = loadInstructions(cwd, next.instructions.filenames);

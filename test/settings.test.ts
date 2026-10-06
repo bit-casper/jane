@@ -151,3 +151,11 @@ describe('on/off settings', () => {
 		expect(new Set(sections).size).toBe(sections.length);
 	});
 });
+
+describe('block list settings', () => {
+	it('shows the patterns as a count and keeps them out of the line editor', () => {
+		const patterns = SETTINGS.find((s) => s.key === 'block_list.patterns')!;
+		expect(formatValue(patterns, ['a', 'b'])).toBe('2 patterns');
+		expect(parseInput(patterns, 'x')).toHaveProperty('error');
+	});
+});
