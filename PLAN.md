@@ -183,7 +183,7 @@ Done:
 
 Next:
 
-7. **Context management**: `/compact`, plus automatic summarising when the
+7. ✅ **Context management**: `/compact`, plus automatic summarising when the
    context is nearly full
 8. **Remote hosts**: use a stronger machine (the home PC) when it's
    reachable, and fall back to the laptop's local model when it isn't.

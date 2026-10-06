@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { ChatMessage } from './client.js';
+import { isSummary } from './compact.js';
 import type { PermissionMode } from './config.js';
 import { projectSlug, sessionsDir } from './paths.js';
 import type { ToolResult } from './tools/types.js';
@@ -10,6 +11,7 @@ export type SessionEntry =
 	| { type: 'meta'; id: string; cwd: string; created: string; model: string }
 	| { type: 'message'; message: ChatMessage; time: string }
 	| { type: 'tool-display'; toolCallId: string; label: string; result: ToolResult }
+	| { type: 'compact'; tokensBefore: number; time: string }
 	| { type: 'mode'; mode: PermissionMode }
 	| { type: 'model'; model: string };
 
@@ -24,7 +26,10 @@ export type SessionSummary = {
 export type ToolDisplayRecord = { label: string; result: ToolResult };
 
 export type LoadedSession = {
+	/** What the model gets: everything since the last compaction. */
 	messages: ChatMessage[];
+	/** Everything, for showing the conversation on screen. */
+	allMessages: ChatMessage[];
 	/** What the screen showed for each tool call, by tool call id. */
 	toolDisplays: Map<string, ToolDisplayRecord>;
 	mode?: PermissionMode;
@@ -91,6 +96,11 @@ export class Session {
 		this.write({ type: 'tool-display', toolCallId, label, result: { output: '', isError: result.isError, display } });
 	}
 
+	/** The conversation is about to be replaced by a summary (which is added as the next message). */
+	addCompaction(tokensBefore: number): void {
+		this.write({ type: 'compact', tokensBefore, time: new Date().toISOString() });
+	}
+
 	setMode(mode: PermissionMode): void {
 		if (this.started) this.write({ type: 'mode', mode });
 	}
@@ -115,9 +125,12 @@ function readEntries(file: string): SessionEntry[] {
 }
 
 export function loadSession(file: string): LoadedSession {
-	const result: LoadedSession = { messages: [], toolDisplays: new Map() };
+	const result: LoadedSession = { messages: [], allMessages: [], toolDisplays: new Map() };
 	for (const entry of readEntries(file)) {
-		if (entry.type === 'message') result.messages.push(entry.message);
+		if (entry.type === 'message') {
+			result.messages.push(entry.message);
+			result.allMessages.push(entry.message);
+		} else if (entry.type === 'compact') result.messages = [];
 		else if (entry.type === 'tool-display') result.toolDisplays.set(entry.toolCallId, { label: entry.label, result: entry.result });
 		else if (entry.type === 'mode') result.mode = entry.mode;
 		else if (entry.type === 'model') result.model = entry.model;
@@ -146,7 +159,7 @@ export function listSessions(cwd: string, root = sessionsDir): SessionSummary[] 
 			file,
 			updated: fs.statSync(file).mtime,
 			firstPrompt: (first.content as string).replace(/\s+/g, ' ').trim(),
-			messageCount: messages.filter((m) => m.role === 'user' || (m.role === 'assistant' && m.content)).length,
+			messageCount: messages.filter((m) => (m.role === 'user' && !isSummary(m)) || (m.role === 'assistant' && m.content)).length,
 		});
 	}
 	return sessions.sort((a, b) => b.updated.getTime() - a.updated.getTime());

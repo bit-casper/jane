@@ -31,6 +31,12 @@ export type Config = {
 		/** Save a copy of each file before Jane changes it, for /undo. */
 		enabled: boolean;
 	};
+	compact: {
+		/** Compact the conversation automatically when the context fills up. */
+		auto: boolean;
+		/** How full the context gets (percent) before compacting automatically. */
+		at_percent: number;
+	};
 	block_list: {
 		/** Refuse bash commands matching these patterns, in every permission mode. */
 		enabled: boolean;
@@ -71,6 +77,10 @@ export const defaultConfig: Config = {
 	},
 	checkpoints: {
 		enabled: true,
+	},
+	compact: {
+		auto: true,
+		at_percent: 80,
 	},
 	block_list: {
 		enabled: true,
@@ -144,6 +154,10 @@ function validate(config: Config, warnings: string[]): void {
 		config.skills.sources = config.skills.sources.filter((s) => !unknownSources.includes(s));
 	}
 	if (config.block_list.enabled) warnings.push(...compileBlockList(config.block_list.patterns).warnings);
+	if (!(config.compact.at_percent >= 10 && config.compact.at_percent <= 95)) {
+		warnings.push('compact.at_percent must be between 10 and 95');
+		config.compact.at_percent = defaultConfig.compact.at_percent;
+	}
 	if (config.instructions.filenames.length === 0) {
 		config.instructions.filenames = defaultConfig.instructions.filenames;
 	}
