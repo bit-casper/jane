@@ -39,6 +39,11 @@ export type Tool<Args = Record<string, unknown>> = {
 	schema?: Record<string, unknown>;
 	/** True if the tool can change things, so always-ask mode asks first. */
 	needsPermission: boolean;
+	/**
+	 * What "yes for this session" covers, if narrower than the whole tool,
+	 * e.g. one website for web_fetch. `label` is shown in the permission prompt.
+	 */
+	permissionScope?(args: Args): { key: string; label: string };
 	/** Files the tool will change, so a checkpoint can be saved first for /undo. */
 	files?(args: Args, ctx: { cwd: string }): string[];
 	/** Short label for the UI, e.g. `src/app.ts` or the command. */

@@ -172,6 +172,54 @@ project's hooks change (say, after a `git pull`), Jane asks again. `/hooks`
 lists all hooks and whether they're on; `/hooks allow` turns on a project's
 hooks after you said "not now".
 
+### Web tools
+
+Jane can read web pages and search the web, but only once you turn it on:
+
+```toml
+[web]
+enabled = true
+search_url = "http://127.0.0.1:8888"   # your SearXNG; leave empty for fetching only
+```
+
+- **`web_fetch`** gets a page and gives the model its main content as
+  Markdown: the article, without menus, scripts or footers (Readability, the
+  library behind Firefox's reader view). Long pages come in parts. Plain text
+  and JSON come through as they are. Images and PDFs aren't supported.
+- **`web_search`** searches through **SearXNG**, a meta-search engine you run
+  yourself, so there's no account, no API key, and no search company
+  building a profile of you.
+- In always-ask mode, Jane asks before fetching from a website, and "yes for
+  this session" covers that website. Searches don't ask.
+- Everything from the web is marked as untrusted for the model: pages can
+  contain text written to manipulate AI assistants, and the model is told to
+  treat it as information, never as instructions.
+- `web.max_results` sets how many results a search returns (8 by default).
+
+**Setting up SearXNG** (with Docker; it uses about 150 MB of memory):
+
+1. Make `~/.config/searxng/settings.yml` with JSON results turned on (Jane
+   needs them) and the rate limiter off (it's only for you):
+   ```yaml
+   use_default_settings: true
+   server:
+     secret_key: "<run: openssl rand -hex 32>"
+     limiter: false
+     image_proxy: false
+   search:
+     formats:
+       - html
+       - json
+   ```
+2. Start it, reachable only from this computer:
+   ```sh
+   docker run -d --name searxng --restart unless-stopped \
+     -p 127.0.0.1:8888:8080 -v ~/.config/searxng:/etc/searxng:rw searxng/searxng
+   ```
+3. Check it: `curl "http://127.0.0.1:8888/search?q=test&format=json"` should
+   print JSON. If Docker only starts on demand (it does on Arch/Omarchy),
+   `sudo systemctl enable --now docker` makes SearXNG start at boot too.
+
 ### MCP servers
 
 [MCP](https://modelcontextprotocol.io) servers give Jane more tools: a
@@ -337,6 +385,11 @@ api_key = ""
 [[hooks]]                     # your own commands at certain moments (see Hooks)
 event = "turn_end"
 command = 'notify-send "Jane" "Done"'
+
+[web]                         # web tools: off until you turn them on (see Web tools)
+enabled = false
+search_url = ""               # your SearXNG, e.g. "http://127.0.0.1:8888"
+max_results = 8
 
 [mcp.browser]                 # MCP servers: more tools for Jane (see MCP servers)
 command = ["npx", "-y", "@playwright/mcp@latest", "--headless", "--isolated"]

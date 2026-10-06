@@ -57,6 +57,13 @@ export type Config = {
 	hooks: Hook[];
 	/** MCP servers by name. From the user config and, once allowed, the project's. */
 	mcp: Record<string, McpServerConfig>;
+	/** Web tools: fetching pages, and searching through a SearXNG instance. Off by default. */
+	web: {
+		enabled: boolean;
+		/** The SearXNG instance for web_search, e.g. http://127.0.0.1:8888. Empty = no search. */
+		search_url: string;
+		max_results: number;
+	};
 	block_list: {
 		/** Refuse bash commands matching these patterns, in every permission mode. */
 		enabled: boolean;
@@ -108,6 +115,11 @@ export const defaultConfig: Config = {
 	hosts: [],
 	hooks: [],
 	mcp: {},
+	web: {
+		enabled: false,
+		search_url: '',
+		max_results: 8,
+	},
 	block_list: {
 		enabled: true,
 		patterns: DEFAULT_BLOCK_PATTERNS,
@@ -295,6 +307,10 @@ function validate(config: Config, warnings: string[]): void {
 	if (!(config.compact.at_percent >= 10 && config.compact.at_percent <= 95)) {
 		warnings.push('compact.at_percent must be between 10 and 95');
 		config.compact.at_percent = defaultConfig.compact.at_percent;
+	}
+	if (config.web.search_url && !/^https?:\/\/\S+$/.test(config.web.search_url)) {
+		warnings.push('web.search_url must start with http:// or https://');
+		config.web.search_url = '';
 	}
 	if (config.instructions.filenames.length === 0) {
 		config.instructions.filenames = defaultConfig.instructions.filenames;

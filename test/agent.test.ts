@@ -397,4 +397,31 @@ describe('agent loop', () => {
 		expect(requests.at(-1).messages.at(-1).content).toBe('[Context from hooks]\nbranch: feat/x\n[End of context from hooks]\n\nhello');
 		expect(agent.hookContext).toEqual([]);
 	});
+
+	it('remembers "yes for this session" per website for web_fetch', async () => {
+		const { webFetchTool } = await import('../src/tools/web.js');
+		const page = http.createServer((_req, res) => res.writeHead(200, { 'Content-Type': 'text/plain' }).end('page text'));
+		await new Promise<void>((r) => page.listen(0, '127.0.0.1', r));
+		const port = (page.address() as AddressInfo).port;
+		replies = [
+			{ calls: [{ name: 'web_fetch', args: `{"url":"http://127.0.0.1:${port}/a"}` }] },
+			{ calls: [{ name: 'web_fetch', args: `{"url":"http://127.0.0.1:${port}/b"}` }] },
+			{ calls: [{ name: 'web_fetch', args: `{"url":"http://localhost:${port}/c"}` }] },
+			{ content: 'done' },
+		];
+		const agent = makeAgent('always-ask');
+		agent.tools = [...agent.tools, webFetchTool];
+		const asked: string[] = [];
+		const events = {
+			...recorder().events,
+			askPermission: async (r: any) => {
+				asked.push(r.scope);
+				return { kind: 'always' as const };
+			},
+		};
+		await agent.run('read these', events, new AbortController().signal);
+		page.close();
+		// Asked once for 127.0.0.1 (covering /a and /b), and again for localhost.
+		expect(asked).toEqual(['127.0.0.1', 'localhost']);
+	});
 });

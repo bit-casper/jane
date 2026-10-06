@@ -22,6 +22,7 @@ import { type SessionSummary, Session, type ToolDisplayRecord, loadSession } fro
 import { type Skill, discoverSkills, skillContent, skillDirs, skillMessage, skillsPrompt, typedText } from '../skills.js';
 import { findTool, parseArgs, tools as baseTools } from '../tools/index.js';
 import { makeSkillTool } from '../tools/skill.js';
+import { webTools } from '../tools/web.js';
 import { Banner } from './Banner.js';
 import * as ed from './editor.js';
 import {
@@ -236,6 +237,8 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 	const askTrust = trustQueue[0];
 	const askFor = (request: TrustRequest) => setTrustQueue((q) => (q.some((r) => r.kind === request.kind) ? q : [...q, request]));
 	const mcpRef = useRef<McpManager | null>(null);
+	/** The web tool settings in effect (a ref, so /settings changes apply without waiting for a render). */
+	const webRef = useRef(config.web);
 	const mcpAnnounced = useRef(new Map<string, string>());
 	/** The hooks that run: the user's, plus the project's once allowed. */
 	const hooksRef = useRef<Hook[]>([]);
@@ -868,6 +871,7 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 		if (!agent) return;
 		agent.tools = [
 			...baseTools,
+			...webTools(webRef.current),
 			...(skillsRef.current.some((s) => !s.userOnly) ? [makeSkillTool(() => skillsRef.current)] : []),
 			...(mcpRef.current?.tools() ?? []),
 		];
@@ -944,6 +948,10 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 		if (agent && hosts.current === local) useHost(local);
 		if (agent) {
 			agent.autoCompactPercent = next.compact.auto ? next.compact.at_percent : 0;
+			if (key.startsWith('web.')) {
+				webRef.current = next.web;
+				refreshTools();
+			}
 			if (key === 'checkpoints.enabled') {
 				agent.checkpoints = next.checkpoints.enabled ? new Checkpoints(agent.session.file.replace(/\.jsonl$/, '.checkpoints')) : undefined;
 			}
