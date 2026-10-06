@@ -26,7 +26,7 @@ your style.
 | Model | `qwen3.6-abliterated`: Huihui Qwen3.6-35B-A3B abliterated, Q3_K GGUF |
 | Server | `llama-server` (llama.cpp) via `llm.service`, `127.0.0.1:8080`, 64k context, `--jinja` with a Qwen chat template (tool calling supported) |
 | Runtime | Node 26 (via mise), ripgrep available |
-| Later | The model may move to a bigger machine. Jane only needs the URL. |
+| Later | A stronger home PC as a second host (roadmap item 8). |
 
 ## Technical decisions
 
@@ -172,33 +172,44 @@ Anything not listed above, including skills, `/compact`, checkpoints and
 
 ## Roadmap (one branch and one PR each, roughly in this order)
 
-1. **v1 core**: everything in the v1 spec
-2. **`/settings` menu**: browse and edit every setting inside Jane, saved to the
-   user or project config
-3. **Omarchy theme**: detect the active Omarchy theme, use its colours, and
-   follow theme changes. Your config colours still override it. (We still need
-   to find where this Omarchy version keeps the active theme; it isn't
-   `~/.config/omarchy/current/`.)
-4. **Skills**: load `SKILL.md` skills from `~/.config/jane/skills`,
-   `<project>/.jane/skills`, `~/.claude/skills` and
-   `/usr/share/omarchy/default/agents/skills`. Skill names and descriptions go
-   in the prompt, and a `skill` tool loads the full text when needed. Each
-   source can be turned on or off in settings, and `/<skill-name>` runs one
-   directly.
-5. **Checkpoints and `/undo`**: snapshot files before each `write` or `edit`.
-   `/undo` restores the last change, or picks from a list.
-6. **Block list**: patterns for `bash` commands that are always refused (e.g.
-   `rm -rf ~`, `dd of=/dev/…`, `mkfs`), even in unrestricted mode. Editable,
-   and can be turned off.
+Done:
+
+1. ✅ **v1 core**: everything in the v1 spec (#3)
+2. ✅ **`/settings` menu** (#4)
+3. ✅ **Omarchy theme**: colours from `~/.local/state/omarchy/current/theme/colors.toml`, following theme changes (#5)
+4. ✅ **Skills**: Jane, Claude Code and Omarchy skills, the `skill` tool, `/skills` and `/<skill-name>` (#6)
+5. ✅ **Checkpoints and `/undo`** (#8)
+6. ✅ **Block list** (#9)
+
+Next:
+
 7. **Context management**: `/compact`, plus automatic summarising when the
    context is nearly full
-8. **Hooks**: run your own scripts before or after tool calls and at session
+8. **Remote hosts**: use a stronger machine (the home PC) when it's
+   reachable, and fall back to the laptop's local model when it isn't.
+   - A list of hosts in the config, each with its own name, URL, model,
+     context window and API key, in order of preference
+   - At startup Jane quickly checks each host (about one second each) and
+     uses the first that answers. The status line shows the host in use.
+   - `/host` shows the hosts and whether they're reachable, and switches
+     between them
+   - If the host in use stops answering mid-session, Jane says so and falls
+     back to the next reachable one. If the conversation is too big for the
+     smaller context, it's compacted first (needs item 7).
+   - When a preferred host comes back mid-session, Jane only says it's
+     available; you switch with `/host`. It never switches back on its own,
+     so the model doesn't change halfway through a task.
+   - Scope: the home network. Jane only needs a URL. How it's reached (home
+     Wi-Fi, Tailscale, a VPN) is set up outside Jane and out of scope; the
+     README can mention it. The home server should require an API key
+     (`llama-server --api-key`).
+9. **Hooks**: run your own scripts before or after tool calls and at session
    start and end
-9. **MCP servers**: use external tool servers
-10. **Sub-agents**: let Jane hand tasks to helper agents (more useful once
-    there's a bigger model machine)
-11. **Web tools**: fetch pages and search the web. Off by default.
-12. **Import Claude Code history**: convert Claude Code sessions into Jane
+10. **MCP servers**: use external tool servers
+11. **Sub-agents**: let Jane hand tasks to helper agents (more useful with
+    the home PC as a host)
+12. **Web tools**: fetch pages and search the web. Off by default.
+13. **Import Claude Code history**: convert Claude Code sessions into Jane
     sessions
 
 ## Workflow
