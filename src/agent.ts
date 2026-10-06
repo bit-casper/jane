@@ -26,6 +26,8 @@ export type AgentEvents = {
 	onCompacted?(info: { before: number; after: number; auto: boolean }): void;
 	/** Something worth telling the user that isn't part of the conversation. */
 	onNotice?(text: string, tone: 'info' | 'warning' | 'error'): void;
+	/** The reply so far was thrown away (e.g. its host disconnected) and the request will be sent again. */
+	onDiscard?(): void;
 	askPermission(request: PermissionRequest): Promise<PermissionDecision>;
 };
 
@@ -70,6 +72,11 @@ export class Agent {
 	autoCompactPercent = 80;
 	/** Tokens in use according to the server's last reply, and how many messages that covered. */
 	private usage = { tokens: 0, messages: 0 };
+	/**
+	 * Called when the model server can't be reached. Returns true if it switched
+	 * to another host (and updated settings), so the request can be tried again.
+	 */
+	failover?: () => Promise<boolean>;
 
 	constructor(
 		public settings: ModelSettings,
@@ -153,6 +160,7 @@ export class Agent {
 		this.push({ role: 'user', content });
 		let badCalls = 0;
 		let overflowRetried = false;
+		let failovers = 0;
 
 		for (let step = 0; step < MAX_STEPS; step++) {
 			if (step > 0 && this.needsCompacting()) {
@@ -186,6 +194,18 @@ export class Agent {
 					overflowRetried = true;
 					events.onNotice?.('The conversation no longer fits in the context window, so Jane is compacting it.', 'warning');
 					await this.compact(events, signal, { auto: true });
+					step--;
+					continue;
+				}
+				// The host is gone: switch to another one and send the same request again.
+				if (error instanceof ModelError && error.unreachable && this.failover && failovers < 3 && (await this.failover())) {
+					failovers++;
+					events.onDiscard?.();
+					// The new host may have a smaller context: make the conversation fit first.
+					if (this.needsCompacting()) {
+						await this.autoCompact(events, signal);
+						if (signal.aborted) return 'interrupted';
+					}
 					step--;
 					continue;
 				}

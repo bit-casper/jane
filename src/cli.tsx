@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { render } from 'ink';
 import { type PermissionMode, loadConfig } from './config.js';
 import { log } from './log.js';
+import { HostManager, hostsFromConfig } from './hosts.js';
 import { listSessions } from './session.js';
 import { App, type Overrides, type Start, applyOverrides } from './ui/App.js';
 
@@ -17,10 +18,11 @@ Options:
   -r, --resume [id]     Pick a session to resume, or resume the one with this id
   -m, --model <name>    Use this model for this run
       --mode <mode>     Start in "always-ask" or "unrestricted" mode
+      --host <name>     Use this host (see /host) instead of the first one that answers
   -v, --version         Show the version
   -h, --help            Show this help`;
 
-type Args = { continue: boolean; resume: boolean; resumeId?: string; model?: string; mode?: string };
+type Args = { continue: boolean; resume: boolean; resumeId?: string; model?: string; mode?: string; host?: string };
 
 function fail(message: string): never {
 	process.stderr.write(`jane: ${message}\n`);
@@ -48,6 +50,7 @@ function parseCli(argv: string[]): Args {
 			if (argv[i + 1] && !argv[i + 1]!.startsWith('-')) args.resumeId = argv[++i];
 		} else if (arg === '-m' || arg === '--model') args.model = next();
 		else if (arg === '--mode') args.mode = next();
+		else if (arg === '--host') args.host = next();
 		else fail(`unknown option ${arg}\n\n${USAGE}`);
 	}
 	return args;
@@ -61,6 +64,26 @@ const { config, warnings } = loadConfig(cwd);
 if (args.mode && args.mode !== 'always-ask' && args.mode !== 'unrestricted') fail('--mode must be "always-ask" or "unrestricted"');
 const overrides: Overrides = { model: args.model, mode: args.mode as PermissionMode | undefined };
 applyOverrides(config, overrides);
+
+// Pick the machine to use: the first [[hosts]] entry that answers, else this one.
+const hosts = new HostManager(hostsFromConfig(config));
+const hostNotes: string[] = [];
+if (hosts.hosts.length > 1 || args.host) {
+	let picked;
+	try {
+		picked = await hosts.start(args.host);
+	} catch (error) {
+		fail((error as Error).message);
+	}
+	for (const { host, reason } of picked.skipped) {
+		if (host === picked.host) hostNotes.push(`No host is answering, not even ${host.name} (${reason}). Requests will fail until one is back; see /host.`);
+		else hostNotes.push(`${host.name} (${host.baseUrl}): ${reason}. Jane is using ${picked.host.name}.`);
+	}
+	const status = hosts.status.get(picked.host.name);
+	if (args.host && status && !status.ok) hostNotes.push(`${picked.host.name}: ${status.reason}. Requests will fail until that's fixed.`);
+}
+// --model is for this run, on whichever host it starts on.
+if (args.model) hosts.current.model = args.model;
 
 let start: Start = { kind: 'new' };
 if (args.continue || args.resume) {
@@ -82,6 +105,8 @@ let exitInfo: { sessionId?: string; started: boolean } = { started: false };
 
 const instance = render(
 	<App
+		hosts={hosts}
+		hostNotes={hostNotes}
 		config={config}
 		overrides={overrides}
 		warnings={warnings}

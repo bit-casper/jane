@@ -21,6 +21,10 @@ export type Setting = {
 	appliesWhen?: string;
 	/** For lists: an empty list is allowed. */
 	allowEmpty?: boolean;
+	/** For read-only lists: what one item is called ("pattern", "host"). */
+	unit?: string;
+	/** `r` can't reset it (resetting would throw away something the user wrote by hand). */
+	noReset?: boolean;
 };
 
 export const COLOR_NAMES = [
@@ -34,6 +38,10 @@ export const SETTINGS: Setting[] = [
 	{ key: 'model.context_window', section: 'Model', label: 'Context window', type: 'number', description: 'How many tokens the model can hold. Match the server (llama-server -c).' },
 	{ key: 'compact.auto', section: 'Model', label: 'Auto compact', type: 'boolean', description: 'Summarise the conversation automatically when the context gets full, so long sessions keep working.' },
 	{ key: 'compact.at_percent', section: 'Model', label: 'Compact at %', type: 'number', description: 'How full the context gets (10–95%) before Jane compacts automatically.' },
+	{
+		key: 'hosts', section: 'Model', label: 'Other hosts', type: 'readonly', unit: 'host', noReset: true,
+		description: 'Other machines to use when they\'re reachable, like a stronger PC at home. Add them as [[hosts]] in the config file; /host shows and switches them.',
+	},
 	{ key: 'model.api_key', section: 'Model', label: 'API key', type: 'secret', description: 'Only needed for servers that require one. Leave empty for llama-server.' },
 	{
 		key: 'permissions.default_mode', section: 'Permissions', label: 'Default mode', type: 'enum', options: ['always-ask', 'unrestricted'],
@@ -59,7 +67,7 @@ export const SETTINGS: Setting[] = [
 	{ key: 'skills.extra_dirs', section: 'Skills', label: 'Extra folders', type: 'list', allowEmpty: true, appliesWhen: 'new sessions (/clear)', description: 'More folders with skills in them, comma-separated.' },
 	{ key: 'checkpoints.enabled', section: 'Safety', label: 'Undo copies', type: 'boolean', description: 'Save a copy of each file before Jane writes or edits it, so /undo can put it back.' },
 	{ key: 'block_list.enabled', section: 'Safety', label: 'Block list', type: 'boolean', description: 'Refuse dangerous bash commands (rm -rf ~, mkfs, dd onto a disk…) in every permission mode.' },
-	{ key: 'block_list.patterns', section: 'Safety', label: 'Block patterns', type: 'readonly', description: 'The regular expressions for blocked commands. Edit them in the config file; r resets them to the built-in list.' },
+	{ key: 'block_list.patterns', section: 'Safety', label: 'Block patterns', type: 'readonly', unit: 'pattern', description: 'The regular expressions for blocked commands. Edit them in the config file; r resets them to the built-in list.' },
 ];
 
 export type Scope = 'user' | 'project';
@@ -136,7 +144,10 @@ export function parseInput(setting: Setting, text: string): { value: unknown } |
 /** How a value is shown in the menu, and pre-filled when editing. */
 export function formatValue(setting: Setting, value: unknown, forEditing = false): string {
 	if (setting.type === 'boolean') return value ? 'on' : 'off';
-	if (setting.type === 'readonly' && Array.isArray(value)) return `${value.length} pattern${value.length === 1 ? '' : 's'}`;
+	if (setting.type === 'readonly' && Array.isArray(value)) {
+		const unit = setting.unit ?? 'item';
+		return value.length === 0 ? 'none' : `${value.length} ${unit}${value.length === 1 ? '' : 's'}`;
+	}
 	if (setting.type === 'list') return (value as string[]).join(', ') || (forEditing ? '' : '(none)');
 	if (setting.type === 'secret' && !forEditing) return value ? '•'.repeat(8) : '(none)';
 	return String(value);

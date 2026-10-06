@@ -41,6 +41,7 @@ jane --resume        # pick a session to resume
 jane --resume <id>   # resume a specific session
 jane --model <name>  # use another model for this run
 jane --mode unrestricted
+jane --host home     # use this host instead of the first one that answers
 ```
 
 | Key | Action |
@@ -52,7 +53,7 @@ jane --mode unrestricted
 | Shift+Tab | Switch permission mode |
 | Ctrl+C | Clear the input, or press twice to quit |
 
-Commands: `/clear`, `/model [name]`, `/permissions [mode]`, `/settings`, `/skills`, `/<skill> [request]`, `/undo`, `/compact [focus]`, `/help`, `/exit`.
+Commands: `/clear`, `/model [name]`, `/permissions [mode]`, `/settings`, `/skills`, `/<skill> [request]`, `/undo`, `/compact [focus]`, `/host [name]`, `/help`, `/exit`.
 
 ### Permission modes
 
@@ -74,6 +75,34 @@ again. `/compact` does it by hand, optionally with a focus:
 Nothing disappears from your screen, and `--resume` still shows the whole
 conversation; only the model works from the summary. Turn automatic compaction
 off or change when it happens with `compact.auto` and `compact.at_percent`.
+
+### Other machines (hosts)
+
+Jane can use a stronger machine, like a PC at home, whenever it's reachable,
+and fall back to the model on this machine when it isn't. Add each machine as
+a `[[hosts]]` entry; `[model]` stays as this machine and is called `local`.
+
+```toml
+[[hosts]]
+name = "home"
+base_url = "http://192.168.86.42:8080/v1"
+model = "qwen3.6-abliterated-q4"
+context_window = 131072
+api_key = "…"                 # the key the server was started with (--api-key)
+```
+
+- At startup Jane checks all hosts at once (about a second and a half at most)
+  and uses the first one in the list that answers; the status line shows which
+  (`home · model · 12k / 128k`). A host that's down or has the wrong API key
+  is mentioned and skipped.
+- If the host in use stops answering, even in the middle of a reply, Jane
+  says so, switches to the next host that answers, and sends the request
+  again. A smaller context on the new host is handled by compaction.
+- When a host higher in the list is reachable again, Jane says so once; it
+  doesn't switch by itself. `/host` shows all hosts and whether they're
+  reachable, `/host <name>` switches, and `jane --host <name>` starts on one.
+- Jane only needs a URL. How it's reached (home network, Tailscale, a VPN) is
+  up to you.
 
 ### Undo
 

@@ -35,7 +35,15 @@ export type StreamHandlers = {
 
 export type ClientOptions = { baseUrl: string; apiKey?: string };
 
-export class ModelError extends Error {}
+export class ModelError extends Error {
+	/** True when the server couldn't be reached or the connection broke, so another host might work. */
+	readonly unreachable: boolean;
+
+	constructor(message: string, options: { unreachable?: boolean } = {}) {
+		super(message);
+		this.unreachable = Boolean(options.unreachable);
+	}
+}
 
 function headers(apiKey?: string): Record<string, string> {
 	const h: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -50,7 +58,7 @@ async function request(url: string, init: RequestInit): Promise<Response> {
 	} catch (error) {
 		if ((error as Error).name === 'AbortError') throw error;
 		const cause = (error as { cause?: { code?: string } }).cause?.code;
-		throw new ModelError(`can't reach the model server at ${url}${cause ? ` (${cause})` : ''}`);
+		throw new ModelError(`can't reach the model server at ${url}${cause ? ` (${cause})` : ''}`, { unreachable: true });
 	}
 	if (!response.ok) {
 		const body = await response.text().catch(() => '');
@@ -157,16 +165,22 @@ export async function streamChat(
 	if (!response.body) throw new ModelError('model server sent an empty response');
 
 	const acc = new StreamAccumulator(options);
-	for await (const data of sseData(response.body)) {
-		if (data === '[DONE]') break;
-		let chunk;
-		try {
-			chunk = JSON.parse(data);
-		} catch {
-			continue;
+	try {
+		for await (const data of sseData(response.body)) {
+			if (data === '[DONE]') break;
+			let chunk;
+			try {
+				chunk = JSON.parse(data);
+			} catch {
+				continue;
+			}
+			if (chunk.error) throw new ModelError(`model server error: ${chunk.error.message ?? JSON.stringify(chunk.error)}`);
+			acc.add(chunk);
 		}
-		if (chunk.error) throw new ModelError(`model server error: ${chunk.error.message ?? JSON.stringify(chunk.error)}`);
-		acc.add(chunk);
+	} catch (error) {
+		if (error instanceof ModelError || (error as Error).name === 'AbortError' || options.signal?.aborted) throw error;
+		// The connection dropped in the middle of the reply (server stopped, network gone).
+		throw new ModelError(`lost the connection to the model server (${(error as Error).message})`, { unreachable: true });
 	}
 	return acc.result();
 }
