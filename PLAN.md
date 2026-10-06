@@ -26,7 +26,7 @@ your style.
 | Model | `qwen3.6-abliterated`: Huihui Qwen3.6-35B-A3B abliterated, Q3_K GGUF |
 | Server | `llama-server` (llama.cpp) via `llm.service`, `127.0.0.1:8080`, 64k context, `--jinja` with a Qwen chat template (tool calling supported) |
 | Runtime | Node 26 (via mise), ripgrep available |
-| Later | A stronger home PC as a second host (roadmap item 8). |
+| Later | A stronger remote PC as a second host (roadmap item 8). |
 
 ## Technical decisions
 
@@ -185,7 +185,7 @@ Next:
 
 7. ✅ **Context management**: `/compact`, plus automatic summarising when the
    context is nearly full
-8. ✅ **Remote hosts**: use a stronger machine (the home PC) when it's
+8. ✅ **Remote hosts**: use a stronger machine (the remote PC) when it's
    reachable, and fall back to the laptop's local model when it isn't.
    - A list of hosts in the config, each with its own name, URL, model,
      context window and API key, in order of preference
@@ -201,7 +201,7 @@ Next:
      so the model doesn't change halfway through a task.
    - Scope: the home network. Jane only needs a URL. How it's reached (home
      Wi-Fi, Tailscale, a VPN) is set up outside Jane and out of scope; the
-     README can mention it. The home server should require an API key
+     README can mention it. The remote server should require an API key
      (`llama-server --api-key`).
 9. ✅ **Custom system prompt**: let the user replace Jane's built-in
    instructions (who Jane is, how she works) with their own text through a
