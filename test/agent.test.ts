@@ -358,4 +358,43 @@ describe('agent loop', () => {
 		expect(calls).toBe(2);
 		expect(requests.at(-1).messages[0]).toEqual({ role: 'system', content: 'system v2' });
 	});
+
+	it("asks the user's hooks before and after tools", async () => {
+		fs.writeFileSync(path.join(dir, 'a.txt'), 'x\n');
+		replies = [
+			{ calls: [{ name: 'bash', args: '{"command":"git push origin main"}' }] },
+			{ calls: [{ name: 'edit', args: '{"path":"a.txt","old_string":"x","new_string":"y"}' }] },
+			{ content: 'done' },
+		];
+		const agent = makeAgent('always-ask');
+		const seen: string[] = [];
+		agent.hooks = {
+			async before(call) {
+				seen.push(`before ${call.name}`);
+				return call.name === 'bash' ? 'Pushing to main is not allowed.' : undefined;
+			},
+			async after(call) {
+				seen.push(`after ${call.name}`);
+				return call.name === 'edit' ? 'lint: a.txt:1 missing semicolon' : undefined;
+			},
+		};
+		const { log, events } = recorder();
+		await agent.run('ship it', events, new AbortController().signal);
+		// The blocked bash call never reached the permission prompt or ran.
+		expect(seen).toEqual(['before bash', 'before edit', 'after edit']);
+		expect(log.filter((l) => l.startsWith('ask'))).toEqual(['ask edit']);
+		expect(requests[1].messages.at(-1).content).toBe(
+			'Error: a hook set up by the user blocked this, so it did not run. The hook said: Pushing to main is not allowed.',
+		);
+		expect(requests[2].messages.at(-1).content).toBe('Edited a.txt.\n\n[A hook set up by the user says:]\nlint: a.txt:1 missing semicolon');
+	});
+
+	it('sends context from hooks in front of the next message', async () => {
+		const agent = makeAgent();
+		agent.hookContext.push('branch: feat/x');
+		replies = [{ content: 'ok' }];
+		await agent.run('hello', recorder().events, new AbortController().signal);
+		expect(requests.at(-1).messages.at(-1).content).toBe('[Context from hooks]\nbranch: feat/x\n[End of context from hooks]\n\nhello');
+		expect(agent.hookContext).toEqual([]);
+	});
 });
