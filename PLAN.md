@@ -203,7 +203,7 @@ Next:
      Wi-Fi, Tailscale, a VPN) is set up outside Jane and out of scope; the
      README can mention it. The home server should require an API key
      (`llama-server --api-key`).
-9. **Custom system prompt**: let the user replace Jane's built-in
+9. ✅ **Custom system prompt**: let the user replace Jane's built-in
    instructions (who Jane is, how she works) with their own text through a
    `prompt.file` setting, while Jane still adds the parts tools and skills
    depend on (environment, skills list, `JANE.md`). Plus `/prompt` to show

@@ -344,4 +344,18 @@ describe('agent loop', () => {
 			expect(agent.messages).toHaveLength(2);
 		});
 	});
+
+	it('runs the beforeTurn hook at the start of every turn', async () => {
+		const agent = makeAgent();
+		let calls = 0;
+		agent.beforeTurn = () => {
+			calls++;
+			agent.system = `system v${calls}`;
+		};
+		replies = [{ content: 'a' }, { content: 'b' }];
+		await agent.run('one', recorder().events, new AbortController().signal);
+		await agent.run('two', recorder().events, new AbortController().signal);
+		expect(calls).toBe(2);
+		expect(requests.at(-1).messages[0]).toEqual({ role: 'system', content: 'system v2' });
+	});
 });
