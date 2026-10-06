@@ -116,6 +116,8 @@ export function SettingsMenu({ cwd, config, height, onSaved, onClose }: Props) {
 			const text = formatValue(setting, getValue(config, setting.key), true);
 			setEditing({ text, cursor: text.length });
 			setStatus(null);
+		} else if ((key.backspace || key.delete || input === 'r') && setting.noReset) {
+			setStatus({ text: `${setting.label} can only be changed in ${tildify(scopeFile(scope, cwd))}`, tone: 'info' });
 		} else if (key.backspace || key.delete || input === 'r') {
 			if (origin(setting.key, { user: scope === 'user' ? layers.user : {}, project: scope === 'project' ? layers.project : {} }) === 'default') {
 				setStatus({ text: `${setting.label} isn't set in the ${scope} file`, tone: 'info' });
@@ -199,7 +201,7 @@ export function SettingsMenu({ cwd, config, height, onSaved, onClose }: Props) {
 			<Text dimColor>
 				{editing
 					? 'Enter to save · Esc to cancel'
-					: `↑/↓ move · ${choice ? '←/→ change' : setting.type === 'readonly' ? 'edit in the config file' : 'Enter edit'} · Tab user/project · r reset · Esc close`}
+					: `↑/↓ move · ${choice ? '←/→ change' : setting.type === 'readonly' ? 'edit in the config file' : 'Enter edit'} · Tab user/project${setting.noReset ? '' : ' · r reset'} · Esc close`}
 			</Text>
 		</Box>
 	);

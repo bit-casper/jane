@@ -185,7 +185,7 @@ Next:
 
 7. ✅ **Context management**: `/compact`, plus automatic summarising when the
    context is nearly full
-8. **Remote hosts**: use a stronger machine (the home PC) when it's
+8. ✅ **Remote hosts**: use a stronger machine (the home PC) when it's
    reachable, and fall back to the laptop's local model when it isn't.
    - A list of hosts in the config, each with its own name, URL, model,
      context window and API key, in order of preference
@@ -203,13 +203,28 @@ Next:
      Wi-Fi, Tailscale, a VPN) is set up outside Jane and out of scope; the
      README can mention it. The home server should require an API key
      (`llama-server --api-key`).
-9. **Hooks**: run your own scripts before or after tool calls and at session
+9. **Custom system prompt**: let the user replace Jane's built-in
+   instructions (who Jane is, how she works) with their own text through a
+   `prompt.file` setting, while Jane still adds the parts tools and skills
+   depend on (environment, skills list, `JANE.md`). Plus `/prompt` to show
+   the full prompt the model actually gets.
+10. **Hooks**: run your own scripts before or after tool calls and at session
    start and end
-10. **MCP servers**: use external tool servers
-11. **Sub-agents**: let Jane hand tasks to helper agents (more useful with
-    the home PC as a host)
-12. **Web tools**: fetch pages and search the web. Off by default.
-13. **Import Claude Code history**: convert Claude Code sessions into Jane
+11. **MCP servers**: use external tool servers
+12. **Sub-agents**: let Jane hand tasks to helper agents that work in the
+    background, each with its own conversation.
+    - Run them on the other hosts: a background agent uses the first
+      reachable host that isn't busy, and falls back to the laptop. A small
+      machine can then run background work it couldn't handle alone.
+    - Only the model's thinking runs on the host; its tool calls (reading,
+      editing, running commands) still happen on the laptop, where the code
+      is.
+    - A llama-server with `--parallel 1` answers one request at a time, so the
+      main conversation and an agent on the same host queue. Either keep the
+      main conversation on the laptop, or start the host with `--parallel 2`
+      (each slot then gets half the context).
+13. **Web tools**: fetch pages and search the web. Off by default.
+14. **Import Claude Code history**: convert Claude Code sessions into Jane
     sessions
 
 ## Workflow

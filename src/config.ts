@@ -8,6 +8,14 @@ export type PermissionMode = 'always-ask' | 'unrestricted';
 export type ThinkingDisplay = 'full' | 'collapsed' | 'hidden';
 export type ThemeSource = 'omarchy' | 'none';
 
+export type HostConfig = {
+	name: string;
+	base_url: string;
+	model: string;
+	context_window: number;
+	api_key: string;
+};
+
 export type Config = {
 	model: {
 		base_url: string;
@@ -37,6 +45,8 @@ export type Config = {
 		/** How full the context gets (percent) before compacting automatically. */
 		at_percent: number;
 	};
+	/** Other machines to use instead of [model] when they're reachable, in order of preference. */
+	hosts: HostConfig[];
 	block_list: {
 		/** Refuse bash commands matching these patterns, in every permission mode. */
 		enabled: boolean;
@@ -82,6 +92,7 @@ export const defaultConfig: Config = {
 		auto: true,
 		at_percent: 80,
 	},
+	hosts: [],
 	block_list: {
 		enabled: true,
 		patterns: DEFAULT_BLOCK_PATTERNS,
@@ -123,6 +134,8 @@ function merge(base: Plain, override: Plain, where: string, warnings: string[]):
 		if (isPlain(current)) {
 			if (isPlain(value)) out[key] = merge(current, value, name, warnings);
 			else warnings.push(`"${name}" should be a table`);
+		} else if (name === 'hosts') {
+			out[key] = parseHosts(value, warnings);
 		} else if (Array.isArray(current)) {
 			if (Array.isArray(value) && value.every((v) => typeof v === 'string')) out[key] = value;
 			else warnings.push(`"${name}" should be a list of strings`);
@@ -133,6 +146,40 @@ function merge(base: Plain, override: Plain, where: string, warnings: string[]):
 		}
 	}
 	return out;
+}
+
+/** Check [[hosts]] entries; broken ones are skipped with a warning. */
+function parseHosts(value: unknown, warnings: string[]): HostConfig[] {
+	if (!Array.isArray(value)) {
+		warnings.push('"hosts" should be a list of [[hosts]] tables');
+		return [];
+	}
+	const hosts: HostConfig[] = [];
+	value.forEach((entry, i) => {
+		const where = `hosts #${i + 1}`;
+		if (!isPlain(entry)) return warnings.push(`${where} should be a table`);
+		const { name, base_url, model, context_window = 65536, api_key = '' } = entry as Record<string, unknown>;
+		const problems: string[] = [];
+		if (typeof name !== 'string' || !/^[\w.-]+$/.test(name)) problems.push('name (letters, digits, - _ .)');
+		else if (name === 'local') problems.push('a name other than "local" (that\'s [model])');
+		else if (hosts.some((h) => h.name === name)) problems.push('a unique name');
+		if (typeof base_url !== 'string' || !/^https?:\/\/\S+$/.test(base_url)) problems.push('base_url (http://…/v1)');
+		if (typeof model !== 'string' || !model) problems.push('model');
+		if (typeof context_window !== 'number' || !Number.isInteger(context_window) || context_window <= 0) problems.push('context_window (a whole number)');
+		if (typeof api_key !== 'string') problems.push('api_key (a string)');
+		for (const key of Object.keys(entry)) {
+			if (!['name', 'base_url', 'model', 'context_window', 'api_key'].includes(key)) warnings.push(`${where}: unknown setting "${key}"`);
+		}
+		if (problems.length) return warnings.push(`${where} was skipped: it needs ${problems.join(', ')}`);
+		hosts.push({
+			name: name as string,
+			base_url: (base_url as string).replace(/\/+$/, ''),
+			model: model as string,
+			context_window: context_window as number,
+			api_key: api_key as string,
+		});
+	});
+	return hosts;
 }
 
 function validate(config: Config, warnings: string[]): void {

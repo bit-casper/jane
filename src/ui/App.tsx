@@ -8,6 +8,7 @@ import { type InstructionFile, loadInstructions } from '../instructions.js';
 import { type Change, Checkpoints } from '../checkpoints.js';
 import { isSummary } from '../compact.js';
 import { compileBlockList } from '../blocklist.js';
+import { type Host, type HostManager, LOCAL_HOST, describeHost, probe } from '../hosts.js';
 import { log } from '../log.js';
 import { watchOmarchyTheme } from '../omarchy.js';
 import { tildify } from '../paths.js';
@@ -47,6 +48,10 @@ export function applyOverrides(config: Config, overrides: Overrides): Config {
 }
 
 export type AppProps = {
+	/** The machines Jane can use, with the one to start on already chosen. */
+	hosts: HostManager;
+	/** Messages about choosing the host at startup, e.g. "home isn't reachable". */
+	hostNotes: string[];
 	config: Config;
 	overrides: Overrides;
 	warnings: string[];
@@ -65,6 +70,7 @@ const COMMANDS: Suggestion[] = [
 	{ name: 'skills', description: 'List the skills Jane can use' },
 	{ name: 'undo', description: 'Undo file changes Jane made' },
 	{ name: 'compact', description: 'Summarise the conversation to free up context' },
+	{ name: 'host', description: 'Show or switch the machine Jane uses' },
 	{ name: 'help', description: 'Commands and keys' },
 	{ name: 'exit', description: 'Quit Jane' },
 ];
@@ -78,6 +84,7 @@ const HELP = `Commands
   /<skill> [request]  Run a skill, e.g. /omarchy change the gaps
   /undo               Undo file changes Jane made
   /compact [focus]    Summarise the conversation to free up context
+  /host [name]        Show the hosts, or switch to one
   /help               Show this help
   /exit               Quit
 
@@ -133,7 +140,7 @@ function formatTokens(n: number): string {
 	return n >= 1024 ? `${Math.round(n / 1024)}k` : String(n);
 }
 
-function StatusLine({ mode, model, tokens, contextWindow, hint }: { mode: PermissionMode; model: string; tokens: number; contextWindow: number; hint?: string }) {
+function StatusLine({ mode, model, host, tokens, contextWindow, hint }: { mode: PermissionMode; model: string; host?: string; tokens: number; contextWindow: number; hint?: string }) {
 	const colors = useColors();
 	const full = tokens / contextWindow;
 	return (
@@ -148,7 +155,7 @@ function StatusLine({ mode, model, tokens, contextWindow, hint }: { mode: Permis
 				)}
 			</Text>
 			<Text dimColor>
-				{model} · <Text color={full > 0.9 ? colors.diff_remove : full > 0.75 ? 'yellow' : undefined}>{formatTokens(tokens)} / {formatTokens(contextWindow)}</Text>
+				{host ? `${host} · ` : ''}{model} · <Text color={full > 0.9 ? colors.diff_remove : full > 0.75 ? 'yellow' : undefined}>{formatTokens(tokens)} / {formatTokens(contextWindow)}</Text>
 			</Text>
 		</Box>
 	);
@@ -167,7 +174,7 @@ export function App(props: AppProps) {
 	);
 }
 
-function Main({ config, setConfig, overrides, warnings, version, cwd, start, clearScreen, onExit }: AppProps & { setConfig(c: Config): void }) {
+function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, version, cwd, start, clearScreen, onExit }: AppProps & { setConfig(c: Config): void }) {
 	const colors = config.ui.colors;
 	const { exit } = useApp();
 	const { columns, rows } = useWindowSize();
@@ -176,7 +183,11 @@ function Main({ config, setConfig, overrides, warnings, version, cwd, start, cle
 	const [staticKey, setStaticKey] = useState(0);
 	const [items, setItems] = useState<HistoryItem[]>([]);
 	const [mode, setModeState] = useState<PermissionMode>(config.permissions.default_mode);
-	const [model, setModel] = useState(config.model.name);
+	const [model, setModel] = useState(hosts.current.model);
+	const [hostName, setHostName] = useState(hosts.current.name);
+	const [contextWindow, setContextWindow] = useState(hosts.current.contextWindow);
+	const hostNotesShown = useRef(false);
+	const multiHost = hosts.hosts.length > 1;
 	const [tokens, setTokens] = useState(0);
 	const [input, setInput] = useState<ed.EditorState>(ed.empty);
 	const [promptHistory, setPromptHistory] = useState<string[]>([]);
@@ -224,10 +235,11 @@ function Main({ config, setConfig, overrides, warnings, version, cwd, start, cle
 				displays = loaded.toolDisplays;
 				restoredMode = loaded.mode;
 			}
-			const session = new Session(cwd, config.model.name, { id: resume?.id });
+			const host = hosts.current;
+			const session = new Session(cwd, host.model, { id: resume?.id });
 			const startMode = restoredMode ?? config.permissions.default_mode;
 			const agent = new Agent(
-				{ baseUrl: config.model.base_url, apiKey: config.model.api_key || undefined, model: agentRef.current?.settings.model ?? config.model.name },
+				{ baseUrl: host.baseUrl, apiKey: host.apiKey, model: host.model },
 				startMode,
 				systemPrompt(cwd, instructions, listed ? [listed] : []),
 				cwd,
@@ -237,8 +249,9 @@ function Main({ config, setConfig, overrides, warnings, version, cwd, start, cle
 			if (found.skills.some((s) => !s.userOnly)) agent.tools = [...baseTools, makeSkillTool(() => skillsRef.current)];
 			if (config.checkpoints.enabled) agent.checkpoints = new Checkpoints(session.file.replace(/\.jsonl$/, '.checkpoints'));
 			if (config.block_list.enabled) agent.blockRules = compileBlockList(config.block_list.patterns).rules;
-			agent.contextWindow = config.model.context_window;
+			agent.contextWindow = host.contextWindow;
 			agent.autoCompactPercent = config.compact.auto ? config.compact.at_percent : 0;
+			agent.failover = failover;
 			agentRef.current = agent;
 			setModeState(startMode);
 			setModel(agent.settings.model);
@@ -247,6 +260,10 @@ function Main({ config, setConfig, overrides, warnings, version, cwd, start, cle
 
 			const head: HistoryItem[] = [{ key: key(), kind: 'banner' }];
 			for (const w of warnings) head.push({ key: key(), kind: 'info', text: `Config: ${w}`, tone: 'warning' });
+			if (!hostNotesShown.current) {
+				hostNotesShown.current = true;
+				for (const note of hostNotes) head.push({ key: key(), kind: 'info', text: note, tone: 'warning' });
+			}
 			if (instructions.length) {
 				head.push({ key: key(), kind: 'info', text: `Loaded ${instructions.map((f) => (path.dirname(f.path) === cwd ? path.basename(f.path) : tildify(f.path))).join(', ')}` });
 			}
@@ -343,6 +360,10 @@ function Main({ config, setConfig, overrides, warnings, version, cwd, start, cle
 			onReply() {
 				flushLive(false);
 			},
+			onDiscard() {
+				liveRef.current = { reasoning: '', content: '' };
+				setLive(liveRef.current);
+			},
 			onToolStart(call) {
 				setRunning((r) => [...r, call]);
 			},
@@ -417,6 +438,37 @@ function Main({ config, setConfig, overrides, warnings, version, cwd, start, cle
 				await work((events, signal) => agent.compact(events, signal, { focus: arg }));
 				return;
 			}
+			case 'host': {
+				if (!arg) {
+					await hosts.checkAll();
+					const lines = hosts.hosts.map((h) => {
+						const status = hosts.status.get(h.name);
+						const state = h === hosts.current ? 'in use' : status?.ok ? 'reachable' : `not reachable: ${status && !status.ok ? status.reason : 'unknown'}`;
+						return `  ${h === hosts.current ? '●' : ' '} ${h.name.padEnd(10)} ${describeHost(h).padEnd(36)} ${state}\n      ${h.baseUrl}`;
+					});
+					const more = multiHost ? 'Switch with /host <name>.' : 'Add other machines as [[hosts]] in ~/.config/jane/config.toml.';
+					info(`Hosts, in order of preference:\n${lines.join('\n')}\n\n${more}`);
+					return;
+				}
+				const target = hosts.find(arg);
+				if (!target) {
+					info(`There is no host called "${arg}". Hosts: ${hosts.hosts.map((h) => h.name).join(', ')}.`, 'error');
+					return;
+				}
+				if (target === hosts.current) {
+					info(`Already using ${target.name}.`);
+					return;
+				}
+				const status = await probe(target);
+				hosts.status.set(target.name, status);
+				if (!status.ok) {
+					info(`Can't switch to ${target.name}: ${status.reason} (${target.baseUrl}).`, 'error');
+					return;
+				}
+				useHost(target);
+				info(`Switched to ${target.name} (${describeHost(target)}).`);
+				return;
+			}
 			case 'settings':
 				setPanel('settings');
 				return;
@@ -447,14 +499,15 @@ function Main({ config, setConfig, overrides, warnings, version, cwd, start, cle
 				if (arg) {
 					agent.settings.model = arg;
 					agent.session.setModel(arg);
+					hosts.current.model = arg;
 					setModel(arg);
 					info(`Model: ${arg}`);
 					return;
 				}
 				try {
-					const models = await listModels({ baseUrl: config.model.base_url, apiKey: config.model.api_key || undefined });
+					const models = await listModels({ baseUrl: hosts.current.baseUrl, apiKey: hosts.current.apiKey });
 					const list = models.map((m) => (m === agent.settings.model ? `  ● ${m} (current)` : `    ${m}`)).join('\n');
-					info(`Models on ${config.model.base_url}:\n${list}\n\nSwitch with /model <name>`);
+					info(`Models on ${hosts.current.name} (${hosts.current.baseUrl}):\n${list}\n\nSwitch with /model <name>`);
 				} catch (error) {
 					info(`Current model: ${agent.settings.model}\n${(error as Error).message}`, 'error');
 				}
@@ -504,21 +557,58 @@ function Main({ config, setConfig, overrides, warnings, version, cwd, start, cle
 		void runPrompt(text);
 	};
 
+	/** Point the agent at a host: its address, key, model and context size. */
+	function useHost(host: Host) {
+		hosts.current = host;
+		const agent = agentRef.current;
+		if (agent) {
+			agent.settings = { baseUrl: host.baseUrl, apiKey: host.apiKey, model: host.model };
+			agent.contextWindow = host.contextWindow;
+			if (agent.session) agent.session.setModel(host.model);
+		}
+		setModel(host.model);
+		setHostName(host.name);
+		setContextWindow(host.contextWindow);
+	}
+
+	/** The host stopped answering: switch to the next one that does (called by the agent). */
+	async function failover(): Promise<boolean> {
+		const failed = hosts.current;
+		const next = await hosts.failover();
+		if (!next) {
+			info(`${failed.name} stopped answering, and no other host is reachable.`, 'error');
+			return false;
+		}
+		useHost(next);
+		info(`${failed.name} stopped answering, so Jane switched to ${next.name} (${describeHost(next)}).`, 'warning');
+		return true;
+	}
+
+	// Every minute, see whether a host higher on the list is back, and say so once. Jane doesn't switch by itself.
+	useEffect(() => {
+		if (!multiHost) return;
+		const timer = setInterval(async () => {
+			if (busyRef.current || hosts.current === hosts.hosts[0]) return;
+			const back = await hosts.preferredAvailable();
+			if (back) info(`${back.name} is reachable again (${describeHost(back)}). Switch with /host ${back.name}.`);
+		}, 60_000);
+		return () => clearInterval(timer);
+	}, []);
+
 	/** Reload the config after /settings saved something, and apply what can change right away. */
 	const settingSaved = (key: string) => {
 		if (key === 'model.name') delete overridesRef.current.model;
 		if (key === 'permissions.default_mode') delete overridesRef.current.mode;
 		const next = applyOverrides(loadConfig(cwd).config, overridesRef.current);
 		const agent = agentRef.current;
+		// [model] is the local host: update it, and the agent too if local is in use.
+		const local = hosts.find(LOCAL_HOST)!;
+		local.baseUrl = next.model.base_url;
+		local.apiKey = next.model.api_key || undefined;
+		local.contextWindow = next.model.context_window;
+		if (key === 'model.name') local.model = next.model.name;
+		if (agent && hosts.current === local) useHost(local);
 		if (agent) {
-			agent.settings.baseUrl = next.model.base_url;
-			agent.settings.apiKey = next.model.api_key || undefined;
-			if (key === 'model.name') {
-				agent.settings.model = next.model.name;
-				agent.session.setModel(next.model.name);
-				setModel(next.model.name);
-			}
-			agent.contextWindow = next.model.context_window;
 			agent.autoCompactPercent = next.compact.auto ? next.compact.at_percent : 0;
 			if (key === 'checkpoints.enabled') {
 				agent.checkpoints = next.checkpoints.enabled ? new Checkpoints(agent.session.file.replace(/\.jsonl$/, '.checkpoints')) : undefined;
@@ -622,7 +712,7 @@ function Main({ config, setConfig, overrides, warnings, version, cwd, start, cle
 				{(item) => {
 					switch (item.kind) {
 						case 'banner':
-							return <Banner key={item.key} version={version} model={model} cwd={cwd} />;
+							return <Banner key={item.key} version={version} model={multiHost ? `${model} on ${hostName}` : model} cwd={cwd} />;
 						case 'user':
 							return <UserMessage key={item.key} text={item.text} />;
 						case 'assistant':
@@ -681,7 +771,7 @@ function Main({ config, setConfig, overrides, warnings, version, cwd, start, cle
 				active={!busy && !permission}
 				placeholder={busy ? '' : 'Ask Jane anything · /help for commands'}
 			/>}
-			<StatusLine mode={mode} model={model} tokens={tokens} contextWindow={config.model.context_window} hint={hint} />
+			<StatusLine mode={mode} model={model} host={multiHost ? hostName : undefined} tokens={tokens} contextWindow={contextWindow} hint={hint} />
 		</Box>
 	);
 }

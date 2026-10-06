@@ -41,6 +41,7 @@ jane --resume        # pick a session to resume
 jane --resume <id>   # resume a specific session
 jane --model <name>  # use another model for this run
 jane --mode unrestricted
+jane --host home     # use this host instead of the first one that answers
 ```
 
 | Key | Action |
@@ -52,7 +53,7 @@ jane --mode unrestricted
 | Shift+Tab | Switch permission mode |
 | Ctrl+C | Clear the input, or press twice to quit |
 
-Commands: `/clear`, `/model [name]`, `/permissions [mode]`, `/settings`, `/skills`, `/<skill> [request]`, `/undo`, `/compact [focus]`, `/help`, `/exit`.
+Commands: `/clear`, `/model [name]`, `/permissions [mode]`, `/settings`, `/skills`, `/<skill> [request]`, `/undo`, `/compact [focus]`, `/host [name]`, `/help`, `/exit`.
 
 ### Permission modes
 
@@ -74,6 +75,35 @@ again. `/compact` does it by hand, optionally with a focus:
 Nothing disappears from your screen, and `--resume` still shows the whole
 conversation; only the model works from the summary. Turn automatic compaction
 off or change when it happens with `compact.auto` and `compact.at_percent`.
+
+### Other machines (hosts)
+
+Jane can use a stronger machine, like a PC at home, whenever it's reachable,
+and fall back to the model on this machine when it isn't. Add each machine as
+a `[[hosts]]` entry; `[model]` stays as this machine and is called `local`.
+
+```toml
+[[hosts]]
+name = "home"
+base_url = "http://192.168.86.42:8080/v1"
+model = "qwen3.6-abliterated-q4"
+context_window = 131072
+api_key = "…"                 # the key the server was started with (--api-key)
+```
+
+- At startup Jane checks all hosts at once (about a second and a half at most)
+  and uses the first one in the list that answers; the status line shows which
+  (`home · model · 12k / 128k`). A host that's down or has the wrong API key
+  is mentioned and skipped.
+- If the host in use stops answering, even in the middle of a reply, Jane
+  says so, switches to the next host that answers, and sends the request
+  again. A smaller context on the new host is handled by compaction.
+- When a host higher in the list is reachable again, Jane says so once; it
+  doesn't switch by itself. `/host` shows all hosts and whether they're
+  reachable, `/host <name>` switches, and `jane --host <name>` starts on one.
+- Jane only needs a URL. How it's reached (home network, Tailscale, a VPN) is
+  up to you. To set up the other machine, see
+  [Connecting a model on another machine](#connecting-a-model-on-another-machine).
 
 ### Undo
 
@@ -156,6 +186,13 @@ extra_dirs = []               # more folders with skills in them
 auto = true                   # summarise automatically when the context fills up
 at_percent = 80               # how full (10–95%) before compacting
 
+[[hosts]]                     # other machines, tried first in this order (see above)
+name = "home"
+base_url = "http://192.168.86.42:8080/v1"
+model = "qwen3.6-abliterated-q4"
+context_window = 131072
+api_key = ""
+
 [checkpoints]
 enabled = true                # save a copy before each write/edit, for /undo
 
@@ -192,6 +229,92 @@ over the theme. Set `ui.theme = "none"` to use only the config colours.
 | `accent` | `accent` |
 | `diff_add` | `green` |
 | `diff_remove` | `red` |
+
+## Connecting a model on another machine
+
+A stronger computer (a desktop at home, a GPU server) can run the model while
+you work in Jane on your laptop. Jane only talks to it over HTTP, so the other
+machine can run any operating system, GPU and model server, as long as it
+offers the following.
+
+### What the other machine needs
+
+- **An OpenAI-compatible Chat Completions API** at a URL ending in `/v1`,
+  with **streaming** and **tool calling** (function calling). Jane works
+  through tools, so a model or server without tool calling won't be able to
+  do much. Servers that offer this include llama.cpp's `llama-server`
+  (started with `--jinja`), vLLM, LM Studio and Ollama; check your server's
+  documentation for how to turn tool calling on.
+- **A model that's good at tool calling**, with a large enough context. Jane's
+  requests start at about 6,000 tokens and grow during a session.
+- **To listen on the network**, not only on `127.0.0.1`. For `llama-server`
+  that's `--host 0.0.0.0 --port 8080`.
+- **An API key.** Anyone on the same network could otherwise use the server.
+  `llama-server` and vLLM take `--api-key <key>`; for servers without one, put
+  them behind a reverse proxy that checks a key. Make a key with, for
+  example, `openssl rand -hex 16`.
+
+A `llama-server` example (adjust the model, context size and GPU options to
+the machine):
+
+```sh
+llama-server -m model.gguf --alias my-model --jinja -c 131072 \
+  --host 0.0.0.0 --port 8080 --api-key <key>
+```
+
+### Making it reachable
+
+1. **Open the port** in the other machine's firewall, for your home or local
+   network only. On Windows, the network must be set to *Private*.
+2. **Give the machine a fixed address**, for example a DHCP reservation in
+   your router, so its address doesn't change.
+3. **Keep it running:** start the server automatically at boot or login, and
+   turn off sleep.
+4. **Check it from your computer.** It should list the model, and refuse the
+   request without the key (HTTP 401):
+   ```sh
+   curl -H "Authorization: Bearer <key>" http://<address>:8080/v1/models
+   curl -i http://<address>:8080/v1/models
+   ```
+
+Jane only needs a URL. Reaching the machine from outside your home (with
+Tailscale, a VPN or similar) is up to you; once a URL works, Jane can use it.
+
+### Adding it to Jane
+
+Add a `[[hosts]]` entry to `~/.config/jane/config.toml` (see
+[Other machines](#other-machines-hosts)):
+
+```toml
+[[hosts]]
+name = "home"
+base_url = "http://<address>:8080/v1"
+model = "my-model"            # the name the server reports in /v1/models
+context_window = 131072       # the server's context size (-c for llama-server)
+api_key = "<key>"
+```
+
+Start Jane: the banner says which host it's using, and `/host` shows all hosts
+and whether they're reachable. If the host is down, Jane uses this machine and
+says so.
+
+### Testing it properly
+
+Test with a **long request of real text**, like asking Jane to read and
+summarise a big file, not only a short chat. Problems often only show up with
+long prompts: running out of GPU memory, and on some GPUs backend bugs that
+repetitive test text doesn't trigger. If the server crashes, Jane switches to
+this machine and tells you when the other one is back. A start script that
+restarts the server and keeps its log makes crashes easier to live with and to
+diagnose.
+
+### Example: Windows with an Intel Arc GPU
+
+[`examples/windows-intel-arc/`](examples/windows-intel-arc/) is the setup that
+was tested with a Windows PC with an Intel Arc A770 (16 GB): start scripts with
+a crash log and automatic restart, a crash report script, and what we found
+along the way. The short version: on Arc, use llama.cpp's **SYCL** build; the
+Vulkan build crashed on long prompts of normal text.
 
 ## Where Jane keeps things
 
