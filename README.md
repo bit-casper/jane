@@ -229,6 +229,124 @@ over the theme. Set `ui.theme = "none"` to use only the config colours.
 | `diff_add` | `green` |
 | `diff_remove` | `red` |
 
+## Setting up another machine as a host
+
+This is how the home PC was set up and tested: **Windows 11, Intel Arc A770
+(16 GB), 32 GB RAM**, running [llama.cpp](https://github.com/ggml-org/llama.cpp)'s
+SYCL build (Intel's own backend) with the same model as the laptop at higher quality (Q4_K_M) and
+twice the context (128k). The scripts are in [`server/windows/`](server/windows/).
+On Linux the steps are the same idea: build or install llama.cpp, then run the
+same `llama-server` command (see `llm-serve` on the laptop for an example).
+
+Everything goes in `C:\llm`. Commands are for PowerShell.
+
+1. **Download the model** (21.2 GB; it takes a while, so start it first;
+   `-C -` lets you resume an interrupted download):
+   ```powershell
+   mkdir C:\llm\models -Force
+   curl.exe -L -C - -o C:\llm\models\Huihui-Qwen3.6-35B-A3B-abliterated.i1-Q4_K_M.gguf https://huggingface.co/mradermacher/Huihui-Qwen3.6-35B-A3B-abliterated-i1-GGUF/resolve/main/Huihui-Qwen3.6-35B-A3B-abliterated.i1-Q4_K_M.gguf
+   ```
+2. **Update the graphics driver** (for Intel: Intel Driver & Support
+   Assistant).
+3. **Install llama.cpp.** Builds are published as releases named like
+   `b11435`; the Windows files are under *Assets* of each build (the release
+   marked "Latest" doesn't have them). For an Intel Arc card, get the **SYCL**
+   build, `llama-<build>-bin-win-sycl-x64.zip` (it includes Intel's runtime),
+   and unzip it to `C:\llm\llama-sycl`:
+   ```powershell
+   curl.exe -L -o C:\llm\llama-sycl.zip https://github.com/ggml-org/llama.cpp/releases/download/b11435/llama-b11435-bin-win-sycl-x64.zip
+   Expand-Archive C:\llm\llama-sycl.zip -DestinationPath C:\llm\llama-sycl -Force
+   C:\llm\llama-sycl\llama-server.exe --list-devices   # should list the GPU as a SYCL device
+   ```
+   Don't use the Vulkan build on Arc: with this model it crashed on every
+   long prompt of normal text (see *If the server crashes*). For an NVIDIA
+   card use a `win-cuda` build, for AMD `win-vulkan` or `win-rocm`.
+4. **Copy the chat template** from the laptop (`~/.config/llama/qwen3.6-chat.jinja`)
+   to `C:\llm\qwen3.6-chat.jinja`, so tool calls work the same on both
+   machines. If you copy its text to the clipboard on the PC, this saves it
+   without the BOM Notepad would add:
+   ```powershell
+   [IO.File]::WriteAllText('C:\llm\qwen3.6-chat.jinja', (Get-Clipboard -Raw))
+   ```
+5. **Make an API key**, so only Jane can use the server:
+   ```powershell
+   $key = -join ((1..32) | ForEach-Object { '{0:x}' -f (Get-Random -Maximum 16) })
+   Set-Content -Path C:\llm\api-key.txt -Value $key -NoNewline
+   $key
+   ```
+6. **Get the start script** and save it as `C:\llm\start-llm.bat`:
+   - [`start-llm.bat`](server/windows/start-llm.bat): **the version we
+     tested and got working.** It logs to `C:\llm\llama-server.log`, keeps the
+     previous run's log as `llama-server.prev.log` (so a crash's log survives
+     the restart), and restarts the server a minute after it stops.
+   - [`start-llm-minimal.bat`](server/windows/start-llm-minimal.bat): the
+     same settings without the automatic restart, keeping only the crash log.
+
+   ```powershell
+   curl.exe -L -o C:\llm\start-llm.bat https://raw.githubusercontent.com/bit-casper/jane/main/server/windows/start-llm.bat
+   ```
+7. **Start it and check it fits.** Double-click the script; it's ready when it
+   says `listening on http://0.0.0.0:8080`. Test with a **long** request
+   (Jane's start at about 6,000 tokens; a short chat in the browser isn't
+   enough), and watch Task Manager → Performance → GPU → *Dedicated GPU
+   memory*. The tested settings:
+
+   | Setting | Tested value | What it does |
+   |---|---|---|
+   | `N_CPU_MOE` | `20` | Layers whose experts stay in system RAM. Higher uses less GPU memory but is slower. 20 uses about 14.2 of 16 GB when idle. |
+   | `UBATCH` | `256` | Prompt tokens the GPU works on at once. Smaller uses less memory. |
+   | `CTX` | `131072` | Context size. Put the same number in Jane's `context_window`. |
+   | `KV` | `f16` | How the context is stored. `q8_0` uses less memory. |
+
+   With these, the A770 reads prompts at about 132 tokens/s and writes at
+   about 21 tokens/s (the laptop's RTX 4050 with Q3: about 156 and 40). The
+   home PC's gain is quality (Q4) and context (128k), not speed. Test with
+   real text, like a README: repetitive test text can pass where real text
+   crashes.
+
+8. **Let the laptop reach it.** In PowerShell as administrator: make sure the
+   home network is *Private*, and open port 8080 on private networks only.
+   Then find the PC's address, and give it a fixed one in your router (a DHCP
+   reservation) so it doesn't change.
+   ```powershell
+   Get-NetConnectionProfile                     # NetworkCategory should be Private
+   New-NetFirewallRule -DisplayName "llama-server (Jane)" -Direction Inbound -Protocol TCP -LocalPort 8080 -Action Allow -Profile Private
+   Get-NetIPAddress -AddressFamily IPv4 | Where-Object IPAddress -like '192.168.*'
+   ```
+9. **Start at login, and don't sleep.** Put a shortcut to `start-llm.bat` in
+   the folder that `Win+R` → `shell:startup` opens, and set *Make my device
+   sleep after* to *Never* when plugged in. Windows has to be logged in (it
+   can be locked).
+10. **Add it to Jane** as a `[[hosts]]` entry (see *Other machines* above)
+    with the address, the model alias `qwen3.6-abliterated-q4`,
+    `context_window = 131072` and the API key. Check from the laptop:
+    ```sh
+    curl -H "Authorization: Bearer <key>" http://<pc-address>:8080/v1/models
+    ```
+    and in Jane, `/host`.
+
+### If the server crashes
+
+A crash with exit code `-1073740791` (`0xc0000409` in Windows' event log)
+means llama.cpp stopped itself. To see what happened, run
+[`collect-crash-report.ps1`](server/windows/collect-crash-report.ps1): it
+copies the end of both logs, recent crashes and graphics driver resets to the
+clipboard.
+
+What we found on the A770: the **Vulkan** build crashed like this on every
+long prompt of normal text, with nothing in the log, while repetitive test
+text of the same length and short chats worked. The model is a mixture of
+experts, and varied text uses many more of them than repetitive text, which
+seems to trigger a bug in the Vulkan backend on Arc (turning off its
+cooperative-matrix path with `GGML_VK_DISABLE_COOPMAT=1` didn't help). Smaller
+`UBATCH`, more `N_CPU_MOE` and an `f16` KV cache didn't help either. The
+**SYCL** build runs the same requests without crashing.
+
+If a crash does show up in the log as a failed memory allocation, give the GPU
+more room: it also drives the screen, so what else is open matters. Raise
+`N_CPU_MOE` by 2, or lower `CTX`. Either way, Jane switches to the laptop when
+the PC stops answering, and says when it's back.
+
 ## Where Jane keeps things
 
 | What | Where |
