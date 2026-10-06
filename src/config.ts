@@ -29,6 +29,10 @@ export type Config = {
 	instructions: {
 		filenames: string[];
 	};
+	prompt: {
+		/** A file that replaces Jane's built-in instructions. Empty = built-in. */
+		file: string;
+	};
 	skills: {
 		/** Which kinds of skill folders to load: "jane", "claude", "omarchy". */
 		sources: string[];
@@ -80,6 +84,9 @@ export const defaultConfig: Config = {
 	},
 	instructions: {
 		filenames: ['JANE.md'],
+	},
+	prompt: {
+		file: '',
 	},
 	skills: {
 		sources: ['jane', 'claude', 'omarchy'],

@@ -52,6 +52,10 @@ export const SETTINGS: Setting[] = [
 		key: 'instructions.filenames', section: 'Instructions', label: 'File names', type: 'list',
 		description: 'Instruction files to look for, in order; the first one found is used. Comma-separated, e.g. JANE.md, AGENTS.md, CLAUDE.md',
 	},
+	{
+		key: 'prompt.file', section: 'Instructions', label: 'System prompt', type: 'string', allowEmpty: true,
+		description: 'A file that replaces Jane\'s built-in instructions (who she is, how she works). Empty uses the built-in ones. /prompt shows the full prompt; /prompt init makes a file to start from.',
+	},
 	{ key: 'ui.show_thinking', section: 'Display', label: 'Show thinking', type: 'enum', options: ['collapsed', 'full', 'hidden'], description: 'How to show the model\'s thinking: one line, all of it, or not at all.' },
 	{ key: 'ui.theme', section: 'Display', label: 'Theme', type: 'enum', options: ['omarchy', 'none'], description: 'omarchy: use the colours of your current Omarchy theme (colours you set below still win). none: only the colours below.' },
 	{ key: 'ui.colors.user', section: 'Colours', label: 'Your messages', type: 'color', description: 'A colour name (cyan, magentaBright…) or hex (#88c0d0).' },
@@ -127,7 +131,7 @@ export function parseInput(setting: Setting, text: string): { value: unknown } |
 		}
 		case 'string': {
 			if (setting.key === 'model.base_url' && !/^https?:\/\/\S+$/.test(raw)) return { error: 'Enter a URL starting with http:// or https://.' };
-			if (!raw) return { error: 'This can\'t be empty.' };
+			if (!raw && !setting.allowEmpty) return { error: 'This can\'t be empty.' };
 			return { value: raw };
 		}
 		case 'secret':
@@ -144,6 +148,7 @@ export function parseInput(setting: Setting, text: string): { value: unknown } |
 /** How a value is shown in the menu, and pre-filled when editing. */
 export function formatValue(setting: Setting, value: unknown, forEditing = false): string {
 	if (setting.type === 'boolean') return value ? 'on' : 'off';
+	if (setting.type === 'string' && value === '' && !forEditing) return '(built-in)';
 	if (setting.type === 'readonly' && Array.isArray(value)) {
 		const unit = setting.unit ?? 'item';
 		return value.length === 0 ? 'none' : `${value.length} ${unit}${value.length === 1 ? '' : 's'}`;

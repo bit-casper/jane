@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import { Box, Static, Text, useApp, useInput, useWindowSize } from 'ink';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -11,8 +12,9 @@ import { compileBlockList } from '../blocklist.js';
 import { type Host, type HostManager, LOCAL_HOST, describeHost, probe } from '../hosts.js';
 import { log } from '../log.js';
 import { watchOmarchyTheme } from '../omarchy.js';
-import { tildify } from '../paths.js';
-import { systemPrompt } from '../prompt.js';
+import { configDir, tildify } from '../paths.js';
+import { DEFAULT_BASE, type PromptBase, loadPromptBase, promptFileChanged, resolvePromptFile, systemPrompt } from '../prompt.js';
+import { saveSetting } from '../settings.js';
 import { type SessionSummary, Session, type ToolDisplayRecord, loadSession } from '../session.js';
 import { type Skill, discoverSkills, skillContent, skillDirs, skillMessage, skillsPrompt, typedText } from '../skills.js';
 import { findTool, parseArgs, tools as baseTools } from '../tools/index.js';
@@ -68,6 +70,7 @@ const COMMANDS: Suggestion[] = [
 	{ name: 'permissions', description: 'Switch permission mode' },
 	{ name: 'settings', description: 'Change Jane\'s settings' },
 	{ name: 'skills', description: 'List the skills Jane can use' },
+	{ name: 'prompt', description: 'Show the full system prompt, or make your own' },
 	{ name: 'undo', description: 'Undo file changes Jane made' },
 	{ name: 'compact', description: 'Summarise the conversation to free up context' },
 	{ name: 'host', description: 'Show or switch the machine Jane uses' },
@@ -81,6 +84,8 @@ const HELP = `Commands
   /permissions [mode] Switch between always-ask and unrestricted
   /settings           Change settings (saved to your user or project config)
   /skills             List the skills Jane can use
+  /prompt             Show the full system prompt the model gets
+  /prompt init        Make ~/.config/jane/system.md to write your own
   /<skill> [request]  Run a skill, e.g. /omarchy change the gaps
   /undo               Undo file changes Jane made
   /compact [focus]    Summarise the conversation to free up context
@@ -208,6 +213,9 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 	const liveRef = useRef<Live>({ reasoning: '', content: '' });
 	const exitArmedRef = useRef(0);
 	const instructionsRef = useRef<InstructionFile[]>([]);
+	const promptBaseRef = useRef<PromptBase>({ text: DEFAULT_BASE });
+	/** The prompt.file setting in effect, for reloading the file when it changes. */
+	const promptSettingRef = useRef('');
 	const busyRef = useRef(false);
 	const recolorPendingRef = useRef(false);
 	busyRef.current = busy;
@@ -221,6 +229,8 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 		(resume?: SessionSummary) => {
 			const instructions = loadInstructions(cwd, config.instructions.filenames);
 			instructionsRef.current = instructions;
+			promptSettingRef.current = config.prompt.file;
+			promptBaseRef.current = loadPromptBase(config.prompt.file, cwd);
 			const found = discoverSkills(skillDirs(cwd, config.skills.sources, config.skills.extra_dirs));
 			skillsRef.current = found.skills;
 			const listed = skillsPrompt(found.skills);
@@ -241,7 +251,7 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 			const agent = new Agent(
 				{ baseUrl: host.baseUrl, apiKey: host.apiKey, model: host.model },
 				startMode,
-				systemPrompt(cwd, instructions, listed ? [listed] : []),
+				systemPrompt(cwd, instructions, listed ? [listed] : [], promptBaseRef.current.text),
 				cwd,
 				session,
 				messages,
@@ -252,6 +262,11 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 			agent.contextWindow = host.contextWindow;
 			agent.autoCompactPercent = config.compact.auto ? config.compact.at_percent : 0;
 			agent.failover = failover;
+			agent.beforeTurn = () => {
+				// Pick up edits to the custom prompt file before each message.
+				if (!promptFileChanged(promptBaseRef.current)) return;
+				reloadPromptBase(promptSettingRef.current);
+			};
 			agentRef.current = agent;
 			setModeState(startMode);
 			setModel(agent.settings.model);
@@ -267,6 +282,9 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 			if (instructions.length) {
 				head.push({ key: key(), kind: 'info', text: `Loaded ${instructions.map((f) => (path.dirname(f.path) === cwd ? path.basename(f.path) : tildify(f.path))).join(', ')}` });
 			}
+			const base = promptBaseRef.current;
+			if (base.warning) head.push({ key: key(), kind: 'info', text: base.warning, tone: 'warning' });
+			else if (base.file) head.push({ key: key(), kind: 'info', text: `System prompt from ${tildify(base.file)}` });
 			for (const w of found.warnings) head.push({ key: key(), kind: 'info', text: `Skills: ${w}`, tone: 'warning' });
 			if (found.skills.length) {
 				head.push({ key: key(), kind: 'info', text: `Skills: ${found.skills.map((s) => s.name).join(', ')}` });
@@ -513,6 +531,46 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 				}
 				return;
 			}
+			case 'prompt': {
+				if (arg === 'init') {
+					const current = resolvePromptFile(config.prompt.file, cwd);
+					if (current && fs.existsSync(current)) {
+						info(`You already have a system prompt file: ${tildify(current)}. Edit it, and changes apply from your next message.`);
+						return;
+					}
+					const file = path.join(configDir, 'system.md');
+					const existed = fs.existsSync(file);
+					try {
+						if (!existed) {
+							fs.mkdirSync(configDir, { recursive: true });
+							fs.writeFileSync(file, DEFAULT_BASE + '\n');
+						}
+						saveSetting('user', cwd, 'prompt.file', tildify(file));
+					} catch (error) {
+						info(`Couldn't set up ${tildify(file)}: ${(error as Error).message}`, 'error');
+						return;
+					}
+					settingSaved('prompt.file');
+					info(
+						`${existed ? 'Found' : 'Created'} ${tildify(file)}${existed ? '' : ' with the built-in prompt in it'}, and set prompt.file to it. ` +
+							'Edit it in any editor; changes apply from your next message. Jane still adds the environment, skills and JANE.md after it.',
+					);
+					return;
+				}
+				if (arg) {
+					info('Use /prompt to show the system prompt, or /prompt init to make your own.', 'error');
+					return;
+				}
+				const base = promptBaseRef.current;
+				const parts = [
+					base.file ? `your prompt from ${tildify(base.file)}` : 'the built-in prompt',
+					'environment',
+					...(skillsRef.current.some((s) => !s.userOnly) ? ['skills list'] : []),
+					...instructionsRef.current.map((f) => tildify(f.path)),
+				];
+				info(`System prompt (about ${formatTokens(Math.ceil(agent.system.length / 4))} tokens): ${parts.join(' + ')}\n\n${agent.system}`);
+				return;
+			}
 			case 'skills': {
 				const skills = skillsRef.current;
 				if (skills.length === 0) {
@@ -556,6 +614,24 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 		push({ key: key(), kind: 'user', text });
 		void runPrompt(text);
 	};
+
+	/** Put the system prompt back together from its parts: base, environment, skills, instruction files. */
+	function rebuildSystem() {
+		const agent = agentRef.current;
+		if (!agent) return;
+		const listed = skillsPrompt(skillsRef.current);
+		agent.system = systemPrompt(cwd, instructionsRef.current, listed ? [listed] : [], promptBaseRef.current.text);
+	}
+
+	/** Read the custom prompt file again (or go back to the built-in prompt) and say what's in use. */
+	function reloadPromptBase(setting: string) {
+		promptSettingRef.current = setting;
+		const base = loadPromptBase(setting, cwd);
+		promptBaseRef.current = base;
+		rebuildSystem();
+		if (base.warning) info(base.warning, 'warning');
+		else info(base.file ? `Using the system prompt from ${tildify(base.file)}` : 'Using the built-in system prompt.');
+	}
 
 	/** Point the agent at a host: its address, key, model and context size. */
 	function useHost(host: Host) {
@@ -616,11 +692,11 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 			if (key.startsWith('block_list.')) {
 				agent.blockRules = next.block_list.enabled ? compileBlockList(next.block_list.patterns).rules : [];
 			}
+			if (key === 'prompt.file') reloadPromptBase(next.prompt.file);
 			if (key === 'instructions.filenames') {
 				const instructions = loadInstructions(cwd, next.instructions.filenames);
 				instructionsRef.current = instructions;
-				const listed = skillsPrompt(skillsRef.current);
-				agent.system = systemPrompt(cwd, instructions, listed ? [listed] : []);
+				rebuildSystem();
 				info(
 					instructions.length
 						? `Now using ${instructions.map((f) => (path.dirname(f.path) === cwd ? path.basename(f.path) : tildify(f.path))).join(', ')}`

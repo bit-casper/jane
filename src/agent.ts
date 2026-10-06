@@ -147,8 +147,12 @@ export class Agent {
 		}
 	}
 
+	/** Called at the start of every turn, e.g. to pick up an edited system prompt. */
+	beforeTurn?: () => void;
+
 	/** Run one user turn: the model replies, uses tools, and repeats until it's done. */
 	async run(prompt: string, events: AgentEvents, signal: AbortSignal): Promise<TurnOutcome> {
+		this.beforeTurn?.();
 		this.currentPrompt = prompt;
 		const notes = this.notes.splice(0);
 		const content = notes.length ? `${notes.map((n) => `[Note from Jane: ${n}]`).join('\n')}\n\n${prompt}` : prompt;

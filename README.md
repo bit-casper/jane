@@ -53,7 +53,7 @@ jane --host home     # use this host instead of the first one that answers
 | Shift+Tab | Switch permission mode |
 | Ctrl+C | Clear the input, or press twice to quit |
 
-Commands: `/clear`, `/model [name]`, `/permissions [mode]`, `/settings`, `/skills`, `/<skill> [request]`, `/undo`, `/compact [focus]`, `/host [name]`, `/help`, `/exit`.
+Commands: `/clear`, `/model [name]`, `/permissions [mode]`, `/settings`, `/skills`, `/<skill> [request]`, `/prompt [init]`, `/undo`, `/compact [focus]`, `/host [name]`, `/help`, `/exit`.
 
 ### Permission modes
 
@@ -130,6 +130,20 @@ Put instructions for Jane in a `JANE.md` file in your project, and/or in
 `~/.config/jane/JANE.md` for every project. The file names are configurable,
 so Jane can also read `AGENTS.md` or `CLAUDE.md`.
 
+### Your own system prompt
+
+Jane's built-in instructions (who she is and how she works) can be replaced
+with your own. `/prompt init` writes them to `~/.config/jane/system.md` as a
+starting point and sets `prompt.file` to that file; edit it in any editor, and
+the changes apply from your next message. `/prompt` shows the full prompt the
+model gets, and which parts it's made of.
+
+Only that first part is replaced: Jane still adds the environment (working
+directory, date, platform), the skills list and your `JANE.md` after it, so
+tools and skills keep working. Instructions in `JANE.md` still apply, so keep
+the two from contradicting each other. To go back to the built-in prompt,
+reset *System prompt* in `/settings`.
+
 ### Skills
 
 Skills are folders with a `SKILL.md`: a short YAML header (`name`,
@@ -177,6 +191,9 @@ default_mode = "always-ask"   # or "unrestricted"
 
 [instructions]
 filenames = ["JANE.md"]       # first one found wins, e.g. ["JANE.md", "AGENTS.md"]
+
+[prompt]
+file = ""                     # your own system prompt, e.g. "~/.config/jane/system.md"
 
 [skills]
 sources = ["jane", "claude", "omarchy"]
