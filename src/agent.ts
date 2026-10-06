@@ -10,7 +10,7 @@ import { type Tool, type ToolDisplay, ToolError, type ToolResult } from './tools
 export const MAX_BAD_CALLS = 3;
 const MAX_STEPS = 200;
 
-export type PermissionRequest = { tool: Tool<any>; label: string; preview: ToolDisplay };
+export type PermissionRequest = { tool: Tool<any>; label: string; preview: ToolDisplay; scope?: string };
 export type PermissionDecision = { kind: 'yes' } | { kind: 'always' } | { kind: 'no'; feedback?: string };
 
 export type AgentEvents = {
@@ -311,7 +311,9 @@ export class Agent {
 			return { output: `Error: a hook set up by the user blocked this, so it did not run. The hook said: ${refusal}` };
 		}
 
-		if (tool.needsPermission && this.mode === 'always-ask' && !this.allowedForSession.has(tool.name)) {
+		const scope = tool.permissionScope?.(args);
+		const allowKey = scope?.key ?? tool.name;
+		if (tool.needsPermission && this.mode === 'always-ask' && !this.allowedForSession.has(allowKey)) {
 			let preview: ToolDisplay = {};
 			try {
 				preview = (await tool.preview?.(args, ctx)) ?? {};
@@ -323,7 +325,7 @@ export class Agent {
 				}
 				throw error;
 			}
-			const decision = await events.askPermission({ tool, label, preview });
+			const decision = await events.askPermission({ tool, label, preview, scope: scope?.label });
 			if (signal.aborted) return { output: 'Not run: the turn was stopped.' };
 			if (decision.kind === 'no') {
 				events.onToolStart?.({ id: call.id, name, label });
@@ -334,7 +336,7 @@ export class Agent {
 				finish(label, { output: 'Not allowed', isError: true, display: { summary: feedback ? `Not allowed: ${feedback}` : 'Not allowed' } });
 				return { output, denied: !feedback };
 			}
-			if (decision.kind === 'always') this.allowedForSession.add(tool.name);
+			if (decision.kind === 'always') this.allowedForSession.add(allowKey);
 		}
 
 		events.onToolStart?.({ id: call.id, name, label });

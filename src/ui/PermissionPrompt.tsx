@@ -5,6 +5,7 @@ import { DiffView, toolTitle } from './History.js';
 import { useColors } from './theme.js';
 
 const QUESTIONS: Record<string, string> = {
+	web_fetch: 'Fetch this page?',
 	write: 'Write this file?',
 	edit: 'Make this edit?',
 	bash: 'Run this command?',
@@ -25,7 +26,7 @@ export function PermissionPrompt({
 	const name = request.tool.name;
 	const options = [
 		'Yes',
-		`Yes, and don't ask again for ${toolTitle(name)} this session`,
+		`Yes, and don't ask again for ${request.scope ?? toolTitle(name)} this session`,
 		'No, and tell Jane what to do instead',
 	];
 

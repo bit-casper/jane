@@ -18,7 +18,8 @@ export function toolTitle(name: string): string {
 	// MCP tools are <server>__<tool>: show them as "server: tool".
 	const mcp = /^(.+?)__(.+)$/.exec(name);
 	if (mcp) return `${mcp[1]}: ${mcp[2]}`;
-	return name ? name[0]!.toUpperCase() + name.slice(1) : name;
+	const words = name.replace(/_/g, ' ');
+	return words ? words[0]!.toUpperCase() + words.slice(1) : words;
 }
 
 function shorten(text: string, max: number): string {

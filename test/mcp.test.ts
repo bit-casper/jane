@@ -69,6 +69,7 @@ describe('MCP helpers', () => {
 		expect(mcpToolName('s', 'x'.repeat(100))).toHaveLength(64);
 		expect(toolTitle('browser__browser_navigate')).toBe('browser: browser_navigate');
 		expect(toolTitle('read')).toBe('Read');
+		expect(toolTitle('web_fetch')).toBe('Web fetch');
 	});
 
 	it('turns result content into text, describing what the model can\'t see', () => {

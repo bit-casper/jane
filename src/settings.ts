@@ -69,6 +69,9 @@ export const SETTINGS: Setting[] = [
 		description: 'Which skill folders to load, comma-separated: jane (~/.config/jane/skills, .jane/skills), claude (~/.claude/skills, .claude/skills), omarchy.',
 	},
 	{ key: 'skills.extra_dirs', section: 'Skills', label: 'Extra folders', type: 'list', allowEmpty: true, appliesWhen: 'new sessions (/clear)', description: 'More folders with skills in them, comma-separated.' },
+	{ key: 'web.enabled', section: 'Web', label: 'Web tools', type: 'boolean', description: 'Let Jane fetch web pages (asking per website in always-ask mode) and search the web. Off by default.' },
+	{ key: 'web.search_url', section: 'Web', label: 'Search engine', type: 'string', allowEmpty: true, description: 'Your SearXNG address for web_search, e.g. http://127.0.0.1:8888 (JSON output must be enabled). Empty = no search, only fetching.' },
+	{ key: 'web.max_results', section: 'Web', label: 'Search results', type: 'number', description: 'How many results a search returns (the model can ask for up to 20).' },
 	{
 		key: 'hooks', section: 'Safety', label: 'Hooks', type: 'readonly', unit: 'hook', noReset: true,
 		description: 'Commands Jane runs at certain moments (after an edit, before a tool, when she\'s done…). Add them as [[hooks]] in the config file; /hooks lists them.',
@@ -138,7 +141,7 @@ export function parseInput(setting: Setting, text: string): { value: unknown } |
 			return { error: `Choose one of: ${setting.options?.join(', ')}.` };
 		}
 		case 'string': {
-			if (setting.key === 'model.base_url' && !/^https?:\/\/\S+$/.test(raw)) return { error: 'Enter a URL starting with http:// or https://.' };
+			if ((setting.key === 'model.base_url' || (setting.key === 'web.search_url' && raw)) && !/^https?:\/\/\S+$/.test(raw)) return { error: 'Enter a URL starting with http:// or https://.' };
 			if (!raw && !setting.allowEmpty) return { error: 'This can\'t be empty.' };
 			return { value: raw };
 		}

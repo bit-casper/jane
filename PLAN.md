@@ -223,7 +223,7 @@ Next:
       main conversation and an agent on the same host queue. Either keep the
       main conversation on the laptop, or start the host with `--parallel 2`
       (each slot then gets half the context).
-13. **Web tools**: fetch pages and search the web. Off by default.
+13. ✅ **Web tools**: fetch pages and search the web. Off by default.
 14. **Import Claude Code history**: convert Claude Code sessions into Jane
     sessions
 
