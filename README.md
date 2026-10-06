@@ -41,7 +41,7 @@ jane --resume        # pick a session to resume
 jane --resume <id>   # resume a specific session
 jane --model <name>  # use another model for this run
 jane --mode unrestricted
-jane --host home     # use this host instead of the first one that answers
+jane --host remote   # use this host instead of the first one that answers
 ```
 
 | Key | Action |
@@ -84,7 +84,7 @@ a `[[hosts]]` entry; `[model]` stays as this machine and is called `local`.
 
 ```toml
 [[hosts]]
-name = "home"
+name = "remote"
 base_url = "http://192.168.86.42:8080/v1"
 model = "qwen3.6-abliterated-q4"
 context_window = 131072
@@ -93,7 +93,7 @@ api_key = "…"                 # the key the server was started with (--api-key
 
 - At startup Jane checks all hosts at once (about a second and a half at most)
   and uses the first one in the list that answers; the status line shows which
-  (`home · model · 12k / 128k`). A host that's down or has the wrong API key
+  (`remote · model · 12k / 128k`). A host that's down or has the wrong API key
   is mentioned and skipped.
 - If the host in use stops answering, even in the middle of a reply, Jane
   says so, switches to the next host that answers, and sends the request
@@ -273,7 +273,7 @@ its report. Ask for one ("use a helper to…", "in the background, have a
 helper…") or let Jane decide.
 
 - **Where it runs:** on a free host other than the main conversation's, so
-  with the main conversation on your home PC, a helper runs on the laptop and
+  with the main conversation on your remote machine, a helper runs on the laptop and
   the other way round. When no other host is free, it shares the main host
   and they take turns. Jane (or you) can also name a host.
 - **Foreground or background:** in the foreground, Jane waits for the report.
@@ -404,7 +404,7 @@ auto = true                   # summarise automatically when the context fills u
 at_percent = 80               # how full (10–95%) before compacting
 
 [[hosts]]                     # other machines, tried first in this order (see above)
-name = "home"
+name = "remote"
 base_url = "http://192.168.86.42:8080/v1"
 model = "qwen3.6-abliterated-q4"
 context_window = 131072
@@ -516,7 +516,7 @@ Add a `[[hosts]]` entry to `~/.config/jane/config.toml` (see
 
 ```toml
 [[hosts]]
-name = "home"
+name = "remote"
 base_url = "http://<address>:8080/v1"
 model = "my-model"            # the name the server reports in /v1/models
 context_window = 131072       # the server's context size (-c for llama-server)

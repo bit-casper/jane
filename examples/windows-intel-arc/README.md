@@ -68,7 +68,7 @@ Everything goes in `C:\llm`. Commands are for PowerShell.
 9. **In Jane** (on the laptop):
    ```toml
    [[hosts]]
-   name = "home"
+   name = "remote"
    base_url = "http://<pc-address>:8080/v1"
    model = "qwen3.6-abliterated-q4"
    context_window = 131072
