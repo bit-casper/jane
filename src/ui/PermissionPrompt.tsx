@@ -15,10 +15,13 @@ export function PermissionPrompt({
 	request,
 	onDecide,
 	maxPreviewLines,
+	who,
 }: {
 	request: PermissionRequest;
 	onDecide(decision: PermissionDecision): void;
 	maxPreviewLines: number;
+	/** Set when a helper agent is asking, e.g. 'Helper "review" (#2, on home)'. */
+	who?: string;
 }) {
 	const colors = useColors();
 	const [selected, setSelected] = useState(0);
@@ -55,7 +58,12 @@ export function PermissionPrompt({
 
 	const { preview } = request;
 	return (
-		<Box flexDirection="column" borderStyle="round" borderColor={colors.accent} paddingX={1} marginBottom={1}>
+		<Box flexDirection="column" borderStyle="round" borderColor={who ? 'yellow' : colors.accent} paddingX={1} marginBottom={1}>
+			{who ? (
+				<Text bold color="yellow">
+					{who} asks:
+				</Text>
+			) : null}
 			<Text bold color={colors.accent}>
 				{toolTitle(name)}
 				<Text color={undefined} bold={false}>

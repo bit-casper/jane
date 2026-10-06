@@ -158,11 +158,11 @@ function hostAddress(url: string): string {
  * The part of the system prompt that tells the model which model it is, which
  * machine it runs on, and which other machines Jane can use.
  */
-export function hostsPromptSection(manager: HostManager): string {
+export function hostsPromptSection(manager: HostManager, current: Host = manager.current): string {
 	const describe = (h: Host) =>
 		`${h.model} on ${h.name === LOCAL_HOST ? 'this computer ("local")' : `the host "${h.name}" (${hostAddress(h.baseUrl)})`}, ${Math.round(h.contextWindow / 1024)}k context`;
-	const lines = ['# Where you run', `- You are the model ${describe(manager.current)}.`];
-	const others = manager.hosts.filter((h) => h !== manager.current);
+	const lines = ['# Where you run', `- You are the model ${describe(current)}.`];
+	const others = manager.hosts.filter((h) => h !== current);
 	if (others.length) {
 		lines.push('- Other hosts Jane can use (the user switches with /host):');
 		for (const h of others) {

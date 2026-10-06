@@ -54,13 +54,17 @@ export class Session {
 	readonly file: string;
 	private started = false;
 
+	/** The folder all sessions live in (helper agents' sessions go next to their main one). */
+	readonly root: string;
+
 	constructor(
 		readonly cwd: string,
 		private model: string,
 		options: { id?: string; root?: string } = {},
 	) {
 		this.id = options.id ?? newId();
-		this.file = path.join(projectDir(cwd, options.root ?? sessionsDir), `${this.id}.jsonl`);
+		this.root = options.root ?? sessionsDir;
+		this.file = path.join(projectDir(cwd, this.root), `${this.id}.jsonl`);
 		this.started = Boolean(options.id) && fs.existsSync(this.file);
 		if (this.started) this.repairEnd();
 	}

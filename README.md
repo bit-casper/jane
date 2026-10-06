@@ -53,7 +53,7 @@ jane --host home     # use this host instead of the first one that answers
 | Shift+Tab | Switch permission mode |
 | Ctrl+C | Clear the input, or press twice to quit |
 
-Commands: `/clear`, `/model [name]`, `/permissions [mode]`, `/settings`, `/skills`, `/<skill> [request]`, `/prompt [init|diff]`, `/undo`, `/compact [focus]`, `/host [name]`, `/hooks [allow]`, `/mcp [name]`, `/help`, `/exit`.
+Commands: `/clear`, `/model [name]`, `/permissions [mode]`, `/settings`, `/skills`, `/<skill> [request]`, `/prompt [init|diff]`, `/undo`, `/compact [focus]`, `/host [name]`, `/agents [id]`, `/hooks [allow]`, `/mcp [name]`, `/help`, `/exit`.
 
 ### Permission modes
 
@@ -261,6 +261,34 @@ a tool call (120 seconds by default).
   your computer, so Jane asks first, like project hooks, and asks again if
   they change. `/mcp allow` turns them on later. A project can't redefine a
   server you already have under the same name.
+
+### Helper agents
+
+Jane can hand a task to a **helper agent**: a second Jane with its own fresh
+conversation and the same tools, which works on its own and reports back.
+That's useful for self-contained jobs, like researching a question across
+many files or reviewing code, and it keeps the main conversation's context
+small: the helper reads the 20 files, and the main conversation only gets
+its report. Ask for one ("use a helper to…", "in the background, have a
+helper…") or let Jane decide.
+
+- **Where it runs:** on a free host other than the main conversation's, so
+  with the main conversation on your home PC, a helper runs on the laptop and
+  the other way round. When no other host is free, it shares the main host
+  and they take turns. Jane (or you) can also name a host.
+- **Foreground or background:** in the foreground, Jane waits for the report.
+  In the background, Jane carries on with you; when the helper finishes,
+  you're told, and Jane gets its report with your next message.
+- **Several at once:** helpers asked for in the same reply run at the same
+  time, on different hosts if there are any. At most 3 run at once.
+- **Permissions:** in always-ask mode a helper asks like the main conversation
+  does, with its name on the prompt. "Yes for this session" counts for both.
+  Hooks, the block list and `/undo` cover helpers too.
+- `/agents` lists helpers, `/agents <id>` shows a report and where the
+  helper's full conversation is saved, `/agents stop <id>` stops one.
+- Helpers can't start helpers of their own. A helper on a slow machine is
+  slow: reading many files on a laptop that's short on memory can take many
+  minutes.
 
 ### Undo
 
