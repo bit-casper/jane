@@ -3,7 +3,7 @@ import { Box, Static, Text, useApp, useInput, useWindowSize } from 'ink';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Agent, MAX_BAD_CALLS, type PermissionDecision, type PermissionRequest, estimateTokens } from '../agent.js';
 import { type ChatMessage, ModelError, listModels } from '../client.js';
-import type { Config, PermissionMode } from '../config.js';
+import { type Config, type PermissionMode, loadConfig } from '../config.js';
 import { type InstructionFile, loadInstructions } from '../instructions.js';
 import { log } from '../log.js';
 import { tildify } from '../paths.js';
@@ -24,13 +24,24 @@ import {
 import { Input, type Suggestion } from './Input.js';
 import { PermissionPrompt } from './PermissionPrompt.js';
 import { ResumePicker } from './ResumePicker.js';
+import { SettingsMenu } from './SettingsMenu.js';
 import { renderMarkdown } from './markdown.js';
 import { ThemeContext, useColors } from './theme.js';
 
 export type Start = { kind: 'new' } | { kind: 'load'; session: SessionSummary } | { kind: 'pick'; sessions: SessionSummary[] };
 
+/** Settings given on the command line, which win over the config files until changed in /settings. */
+export type Overrides = { model?: string; mode?: PermissionMode };
+
+export function applyOverrides(config: Config, overrides: Overrides): Config {
+	if (overrides.model) config.model.name = overrides.model;
+	if (overrides.mode) config.permissions.default_mode = overrides.mode;
+	return config;
+}
+
 export type AppProps = {
 	config: Config;
+	overrides: Overrides;
 	warnings: string[];
 	version: string;
 	cwd: string;
@@ -43,6 +54,7 @@ const COMMANDS: Suggestion[] = [
 	{ name: 'clear', description: 'Start a fresh session' },
 	{ name: 'model', description: 'Show or change the model' },
 	{ name: 'permissions', description: 'Switch permission mode' },
+	{ name: 'settings', description: 'Change Jane\'s settings' },
 	{ name: 'help', description: 'Commands and keys' },
 	{ name: 'exit', description: 'Quit Jane' },
 ];
@@ -51,6 +63,7 @@ const HELP = `Commands
   /clear              Start a fresh session
   /model [name]       Show the available models, or switch to one
   /permissions [mode] Switch between always-ask and unrestricted
+  /settings           Change settings (saved to your user or project config)
   /help               Show this help
   /exit               Quit
 
@@ -131,14 +144,15 @@ const SPINNER = ['·', '✢', '✳', '✶', '✻', '✽', '✻', '✶', '✳', '
 type Live = { reasoning: string; content: string; thinkStart?: number };
 
 export function App(props: AppProps) {
+	const [config, setConfig] = useState(props.config);
 	return (
-		<ThemeContext.Provider value={props.config.ui.colors}>
-			<Main {...props} />
+		<ThemeContext.Provider value={config.ui.colors}>
+			<Main {...props} config={config} setConfig={setConfig} />
 		</ThemeContext.Provider>
 	);
 }
 
-function Main({ config, warnings, version, cwd, start, clearScreen, onExit }: AppProps) {
+function Main({ config, setConfig, overrides, warnings, version, cwd, start, clearScreen, onExit }: AppProps & { setConfig(c: Config): void }) {
 	const colors = config.ui.colors;
 	const { exit } = useApp();
 	const { columns, rows } = useWindowSize();
@@ -158,6 +172,8 @@ function Main({ config, warnings, version, cwd, start, clearScreen, onExit }: Ap
 	const [hint, setHint] = useState<string>();
 	const [tick, setTick] = useState(0);
 	const [startedAt, setStartedAt] = useState(0);
+	const [panel, setPanel] = useState<'settings' | null>(null);
+	const overridesRef = useRef<Overrides>({ ...overrides });
 
 	const agentRef = useRef<Agent | null>(null);
 	const abortRef = useRef<AbortController | null>(null);
@@ -325,6 +341,9 @@ function Main({ config, warnings, version, cwd, start, clearScreen, onExit }: Ap
 			case 'help':
 				info(HELP);
 				return;
+			case 'settings':
+				setPanel('settings');
+				return;
 			case 'permissions': {
 				const next = arg ? arg : mode === 'always-ask' ? 'unrestricted' : 'always-ask';
 				if (next !== 'always-ask' && next !== 'unrestricted') {
@@ -370,8 +389,36 @@ function Main({ config, warnings, version, cwd, start, clearScreen, onExit }: Ap
 		void runPrompt(text);
 	};
 
+	/** Reload the config after /settings saved something, and apply what can change right away. */
+	const settingSaved = (key: string) => {
+		if (key === 'model.name') delete overridesRef.current.model;
+		if (key === 'permissions.default_mode') delete overridesRef.current.mode;
+		const next = applyOverrides(loadConfig(cwd).config, overridesRef.current);
+		const agent = agentRef.current;
+		if (agent) {
+			agent.settings.baseUrl = next.model.base_url;
+			agent.settings.apiKey = next.model.api_key || undefined;
+			if (key === 'model.name') {
+				agent.settings.model = next.model.name;
+				agent.session.setModel(next.model.name);
+				setModel(next.model.name);
+			}
+			if (key === 'instructions.filenames') {
+				const instructions = loadInstructions(cwd, next.instructions.filenames);
+				instructionsRef.current = instructions;
+				agent.system = systemPrompt(cwd, instructions);
+				info(
+					instructions.length
+						? `Now using ${instructions.map((f) => (path.dirname(f.path) === cwd ? path.basename(f.path) : tildify(f.path))).join(', ')}`
+						: `No instruction file found (looked for ${next.instructions.filenames.join(', ')})`,
+				);
+			}
+		}
+		setConfig(next);
+	};
+
 	useInput((char, k) => {
-		if (phase !== 'chat') return;
+		if (phase !== 'chat' || panel) return;
 		if (k.ctrl && char === 'c') {
 			if (busy) {
 				abortRef.current?.abort();
@@ -478,7 +525,10 @@ function Main({ config, warnings, version, cwd, start, clearScreen, onExit }: Ap
 					</Text>
 				</Box>
 			)}
-			{!permission && <Input
+			{panel === 'settings' && (
+				<SettingsMenu cwd={cwd} config={config} height={rows} onSaved={(s) => settingSaved(s.key)} onClose={() => setPanel(null)} />
+			)}
+			{!permission && !panel && <Input
 				value={input}
 				onChange={setInput}
 				onSubmit={submit}

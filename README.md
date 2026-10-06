@@ -52,7 +52,7 @@ jane --mode unrestricted
 | Shift+Tab | Switch permission mode |
 | Ctrl+C | Clear the input, or press twice to quit |
 
-Commands: `/clear`, `/model [name]`, `/permissions [mode]`, `/help`, `/exit`.
+Commands: `/clear`, `/model [name]`, `/permissions [mode]`, `/settings`, `/help`, `/exit`.
 
 ### Permission modes
 
@@ -69,8 +69,13 @@ so Jane can also read `AGENTS.md` or `CLAUDE.md`.
 
 ## Configuration
 
-`~/.config/jane/config.toml`, overridden per project by `.jane/config.toml`.
-Every setting is optional; these are the defaults:
+The easiest way to change settings is `/settings` inside Jane: pick a
+setting, change it, and it's saved and applied right away. Tab switches between
+saving to your user config and to the project's config, and `r` resets a
+setting to the default. Comments in your config files are kept.
+
+The files are `~/.config/jane/config.toml`, overridden per project by
+`.jane/config.toml`. Every setting is optional; these are the defaults:
 
 ```toml
 [model]
