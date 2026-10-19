@@ -107,6 +107,15 @@ she says so instead of guessing. Each image takes up to about 1,000 tokens
 the context, and she can look again with `read`. Pasting needs `wl-paste`
 (Wayland) or `xclip` (X11).
 
+### herdr
+
+Inside [herdr](https://herdr.dev), Jane tells it whether she's working,
+waiting for you, or waiting for a decision (a permission question). herdr
+shows that in its sidebar and notifies you when she's done or needs you.
+With herdr 0.9.2 or later she also gives it the command to resume the
+session, so a restored pane picks up the same conversation. Outside herdr
+this does nothing.
+
 ### Other machines (hosts)
 
 Jane can use a stronger machine, like a PC at home, whenever it's reachable,

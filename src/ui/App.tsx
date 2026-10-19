@@ -12,6 +12,7 @@ import { checkImage, clipboardImages, clipboardText, imageLabel, imagePathsIn } 
 import { compileBlockList } from '../blocklist.js';
 import { type Host, type HostManager, LOCAL_HOST, describeHost, hostVision, hostsPromptSection, probe } from '../hosts.js';
 import { type Hook, type HookEvent, type HookPayload, type HookRun, blockMessage, fingerprint, hookProblem, isTrusted, isTrustedPrint, runHooks, shortCommand, trust, trustPrint } from '../hooks.js';
+import { herdr } from '../herdr.js';
 import { McpManager, type McpServerConfig } from '../mcp.js';
 import { HELPER_INSTRUCTIONS, type Helper, Helpers, makeAgentTool, reportText, seconds as helperSeconds } from '../subagents.js';
 import { log } from '../log.js';
@@ -260,6 +261,16 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 	/** What a project's config wants to run, waiting for the user's OK (one question at a time). */
 	const [trustQueue, setTrustQueue] = useState<TrustRequest[]>([]);
 	const askTrust = trustQueue[0];
+
+	// Tell herdr (if Jane runs in it) whether she's working or waiting, so it can notify the user.
+	useEffect(() => {
+		const agent = agentRef.current;
+		const sessionId = agent?.messages.length ? agent.session.id : undefined;
+		const session = sessionId ? { sessionId, resume: ['jane', '--resume', sessionId] } : {};
+		if (permission) herdr.report('blocked', { message: `Allow ${permission.request.tool.name}: ${permission.request.label}`, ...session });
+		else if (askTrust) herdr.report('blocked', { message: `Allow this project's ${askTrust.kind === 'hooks' ? 'hooks' : 'MCP servers'}?`, ...session });
+		else herdr.report(busy ? 'working' : 'idle', session);
+	}, [busy, permission, askTrust]);
 	const askFor = (request: TrustRequest) => setTrustQueue((q) => (q.some((r) => r.kind === request.kind) ? q : [...q, request]));
 	const mcpRef = useRef<McpManager | null>(null);
 	/** The web tool settings in effect (a ref, so /settings changes apply without waiting for a render). */
