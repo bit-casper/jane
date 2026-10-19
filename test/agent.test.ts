@@ -8,7 +8,7 @@ import { Agent, type AgentEvents, type PermissionDecision } from '../src/agent.j
 import { DEFAULT_BLOCK_PATTERNS, compileBlockList } from '../src/blocklist.js';
 import { ModelError } from '../src/client.js';
 import { Checkpoints } from '../src/checkpoints.js';
-import { SUMMARY_SYSTEM, isSummary } from '../src/compact.js';
+import { CLEARED_OUTPUT, KEPT_LINE, SUMMARY_SYSTEM, isSummary } from '../src/compact.js';
 import { Session, loadSession } from '../src/session.js';
 
 // A fake OpenAI-compatible server. Each test queues the replies it should stream.
@@ -230,7 +230,7 @@ describe('agent loop', () => {
 	describe('compaction', () => {
 		const isSummaryRequest = (r: any) => r.messages[0].content === SUMMARY_SYSTEM;
 
-		it('replaces the conversation with a summary on /compact, and keeps it on resume', async () => {
+		it('replaces the older conversation with a summary on /compact, keeps the newest messages, and keeps both on resume', async () => {
 			replies = [{ content: 'Paris.' }];
 			const agent = makeAgent();
 			await agent.run('What is the capital of France?', recorder().events, new AbortController().signal);
@@ -243,18 +243,22 @@ describe('agent loop', () => {
 			expect(isSummaryRequest(req)).toBe(true);
 			expect(req.tools).toBeUndefined();
 			expect(req.messages[1].content).toContain('User: What is the capital of France?');
-			expect(req.messages[1].content).toContain('Jane: Paris.');
+			expect(req.messages[1].content).toContain(`${KEPT_LINE}\n\nJane: Paris.`);
 			expect(req.messages[1].content).toContain('focus on: geography');
 
-			expect(agent.messages).toHaveLength(1);
+			// The reply is kept word for word; the question it answered is quoted in the summary.
+			expect(agent.messages.map((m) => m.content)).toEqual([expect.stringContaining('Asked for the capital of France.'), 'Paris.']);
 			expect(isSummary(agent.messages[0]!)).toBe(true);
-			expect(agent.messages[0]!.content).toContain('Asked for the capital of France.');
+			expect(agent.messages[0]!.content).toContain("[The user's latest request, word for word:]\nWhat is the capital of France?");
+			expect(agent.messages[0]!.content).not.toMatch(/Carry on from where you stopped/);
 			expect(compacted).toEqual([{ ...result, auto: false }]);
+			expect(result.kept).toBe(1);
 
 			replies = [{ content: 'ok' }];
 			await agent.run('and Spain?', recorder().events, new AbortController().signal);
 			const loaded = loadSession(agent.session.file);
-			expect(loaded.messages.map((m) => m.role)).toEqual(['user', 'user', 'assistant']);
+			expect(loaded.messages).toEqual(agent.messages);
+			expect(loaded.messages.map((m) => m.role)).toEqual(['user', 'assistant', 'user', 'assistant']);
 			expect(isSummary(loaded.messages[0]!)).toBe(true);
 			expect(loaded.allMessages.map((m) => m.content)).toEqual([
 				'What is the capital of France?',
@@ -275,7 +279,7 @@ describe('agent loop', () => {
 			await agent.run('second question', recorder().events, new AbortController().signal);
 			expect(isSummaryRequest(requests.at(-2))).toBe(true);
 			const last = requests.at(-1).messages;
-			expect(last.slice(1).map((m: any) => m.content)).toEqual([expect.stringContaining('summary of first'), 'second question']);
+			expect(last.slice(1).map((m: any) => m.content)).toEqual([expect.stringContaining('summary of first'), 'first answer', 'second question']);
 		});
 
 		it('compacts in the middle of a task and carries on', async () => {
@@ -296,6 +300,32 @@ describe('agent loop', () => {
 			// The summary request had the long tool output shortened.
 			expect(requests[1].messages[1].content).toMatch(/characters cut/);
 			expect(agent.messages.map((m) => m.role)).toEqual(['user', 'assistant']);
+			// Too big to keep, so the summary carries the request, the files and a note to carry on.
+			const summary = agent.messages[0]!.content!;
+			expect(summary).toContain("[The user's latest request, word for word:]\nwhat is in big.txt?\n");
+			expect(summary).toContain('[Files Jane read or changed before this point: big.txt]');
+			expect(summary).toMatch(/Carry on from where you stopped/);
+		});
+
+		it('clears old tool output before summarising, and only output the model has already seen', async () => {
+			fs.writeFileSync(path.join(dir, 'a.txt'), 'a'.repeat(3000));
+			fs.writeFileSync(path.join(dir, 'b.txt'), 'b'.repeat(3000));
+			const agent = makeAgent();
+			agent.contextWindow = 4000;
+			agent.autoCompactPercent = 80;
+			const cleared: any[] = [];
+			replies = [
+				{ calls: [{ name: 'read', args: '{"path":"a.txt"}' }], promptTokens: 500 },
+				{ content: 'Read a, now b.', calls: [{ name: 'read', args: '{"path":"b.txt"}' }], promptTokens: 3300 },
+				{ content: 'Both are letters.' },
+			];
+			const events = { ...recorder().events, onCleared: (i: any) => cleared.push(i) };
+			expect(await agent.run('compare a.txt and b.txt', events, new AbortController().signal)).toBe('done');
+			expect(requests.map(isSummaryRequest)).toEqual([false, false, false]);
+			expect(cleared).toEqual([expect.objectContaining({ count: 1 })]);
+			const tools = requests[2].messages.filter((m: any) => m.role === 'tool').map((m: any) => m.content);
+			expect(tools).toEqual([CLEARED_OUTPUT, expect.stringContaining('bbbb')]);
+			expect(loadSession(agent.session.file).messages).toEqual(agent.messages);
 		});
 
 		it('compacts and retries once when the server says the context is full', async () => {

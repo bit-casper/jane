@@ -65,11 +65,22 @@ Commands: `/clear`, `/model [name]`, `/permissions [mode]`, `/settings`, `/skill
 ### Long sessions
 
 The context window (64k tokens on the laptop) fills up as a session goes on;
-the status line shows how full it is. When it passes 80%, Jane compacts the
-conversation: the model writes a summary (requests, work done, current state,
-next steps, key facts) and that replaces the history, even in the middle of a
-task. If the server says the conversation doesn't fit, Jane compacts and tries
-again. `/compact` does it by hand, optionally with a focus:
+the status line shows how full it is. When it passes 80%, Jane makes room in
+two steps, cheapest first:
+
+1. **Clear old tool output.** Old file contents and command output are replaced
+   by a short note. The calls themselves stay, so Jane knows what she did and
+   can run them again. Output from the newest quarter of the context is kept.
+   If this frees enough space, that's all that happens.
+2. **Summarise the older part.** The model writes a summary (current task,
+   progress, next step, every user message marked done or open, files, errors,
+   key facts) that replaces the older messages. The newest messages, up to a
+   quarter of the context, stay word for word. If your latest request isn't
+   among them, it's added to the summary word for word. If Jane was in the
+   middle of a task, she's told to carry on instead of starting over.
+
+If the server says the conversation doesn't fit, Jane compacts and tries
+again. `/compact` summarises by hand, optionally with a focus:
 `/compact keep the details of the API errors`.
 
 Nothing disappears from your screen, and `--resume` still shows the whole

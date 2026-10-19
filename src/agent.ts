@@ -1,5 +1,16 @@
 import { type ChatMessage, ModelError, type StreamResult, type ToolCall, streamChat } from './client.js';
-import { SUMMARY_SYSTEM, fittingTranscript, isContextOverflow, summaryMessage, summaryRequest } from './compact.js';
+import {
+	SUMMARY_SYSTEM,
+	clearToolOutputs,
+	fittingTranscript,
+	isContextOverflow,
+	isSummary,
+	keptStart,
+	oldToolOutputs,
+	summaryMessage,
+	summaryRequest,
+	touchedFiles,
+} from './compact.js';
 import type { PermissionMode } from './config.js';
 import type { Checkpoints } from './checkpoints.js';
 import { type BlockRule, blockedBy, describeRule } from './blocklist.js';
@@ -9,6 +20,8 @@ import { type Tool, type ToolDisplay, ToolError, type ToolResult } from './tools
 
 export const MAX_BAD_CALLS = 3;
 const MAX_STEPS = 200;
+/** How much of the context window the newest messages may fill and still be kept word for word at a compaction. */
+const KEEP_PERCENT = 25;
 
 export type PermissionRequest = { tool: Tool<any>; label: string; preview: ToolDisplay; scope?: string };
 export type PermissionDecision = { kind: 'yes' } | { kind: 'always' } | { kind: 'no'; feedback?: string };
@@ -23,7 +36,10 @@ export type AgentEvents = {
 	onUsage?(tokens: number): void;
 	/** Jane is about to compact the conversation (the model is writing a summary). */
 	onCompacting?(info: { auto: boolean }): void;
-	onCompacted?(info: { before: number; after: number; auto: boolean }): void;
+	/** `kept`: how many of the newest messages were kept word for word. */
+	onCompacted?(info: { before: number; after: number; auto: boolean; kept: number }): void;
+	/** Old tool output was cleared to save space (no summary needed). */
+	onCleared?(info: { before: number; after: number; count: number }): void;
 	/** Something worth telling the user that isn't part of the conversation. */
 	onNotice?(text: string, tone: 'info' | 'warning' | 'error'): void;
 	/** The reply so far was thrown away (e.g. its host disconnected) and the request will be sent again. */
@@ -118,18 +134,28 @@ export class Agent {
 		return base + estimateMessages(this.messages.slice(this.usage.messages));
 	}
 
-	private needsCompacting(extra = 0): boolean {
-		return this.autoCompactPercent > 0 && this.messages.length > 1 && this.contextTokens() + extra > (this.contextWindow * this.autoCompactPercent) / 100;
+	private needsCompacting(extra = 0, percent = this.autoCompactPercent): boolean {
+		return this.autoCompactPercent > 0 && this.messages.length > 1 && this.contextTokens() + extra > (this.contextWindow * percent) / 100;
+	}
+
+	private get keepTokens(): number {
+		return Math.floor((this.contextWindow * KEEP_PERCENT) / 100);
 	}
 
 	/**
-	 * Replace the conversation with a summary written by the model. On failure
-	 * (or Esc) the conversation is left as it was.
+	 * Replace the older part of the conversation with a summary written by the
+	 * model, keeping the newest messages word for word. On failure (or Esc) the
+	 * conversation is left as it was.
 	 */
-	async compact(events: AgentEvents, signal: AbortSignal, options: { focus?: string; auto?: boolean } = {}): Promise<{ before: number; after: number }> {
+	async compact(
+		events: AgentEvents,
+		signal: AbortSignal,
+		options: { focus?: string; auto?: boolean; continueTask?: boolean } = {},
+	): Promise<{ before: number; after: number; kept: number }> {
 		if (this.messages.length === 0) throw new ModelError('there is nothing to compact yet');
 		const auto = Boolean(options.auto);
 		const before = this.contextTokens();
+		const start = keptStart(this.messages, this.keepTokens);
 		events.onCompacting?.({ auto });
 		// Leave room for the instructions, the model's thinking and the summary itself.
 		const budget = Math.max(2000, this.contextWindow - 12000);
@@ -139,27 +165,57 @@ export class Agent {
 			model: this.settings.model,
 			messages: [
 				{ role: 'system', content: SUMMARY_SYSTEM },
-				{ role: 'user', content: summaryRequest(fittingTranscript(this.messages, budget), options.focus) },
+				{ role: 'user', content: summaryRequest(fittingTranscript(this.messages, budget, start), options.focus) },
 			],
 			tools: [],
 			signal,
 		});
 		const summary = reply.content.trim();
 		if (!summary) throw new ModelError('the model returned an empty summary, so nothing was compacted');
-		this.session.addCompaction(before);
-		this.messages.splice(0);
-		this.push(summaryMessage(summary));
+
+		// The user's latest request goes in word for word, unless it's among the kept messages.
+		const requestAt = this.messages.findLastIndex((m) => m.role === 'user' && !isSummary(m));
+		const latest = this.messages[requestAt];
+		const request = latest?.role === 'user' && requestAt < start ? stripNotes(latest.content) : undefined;
+		const message = summaryMessage(summary, {
+			request,
+			files: touchedFiles(this.messages.slice(0, start)),
+			continueTask: options.continueTask,
+		});
+		const kept = this.messages.length - start;
+		this.session.addCompaction(before, kept);
+		this.messages.splice(0, start, message);
+		this.session.addMessage(message);
 		this.usage = { tokens: 0, messages: 0 };
 		const after = this.contextTokens();
-		events.onCompacted?.({ before, after, auto });
+		events.onCompacted?.({ before, after, auto, kept });
 		events.onUsage?.(after);
-		return { before, after };
+		return { before, after, kept };
 	}
 
-	/** Compact automatically; if that fails, say so and carry on with the full conversation. */
-	private async autoCompact(events: AgentEvents, signal: AbortSignal): Promise<void> {
+	/** Clear the output of old tool calls. Returns false if there was nothing to clear. */
+	private clearOldOutput(events: AgentEvents): boolean {
+		const positions = oldToolOutputs(this.messages, this.keepTokens);
+		if (positions.length === 0) return false;
+		const before = this.contextTokens();
+		clearToolOutputs(this.messages, positions);
+		this.session.addClear(positions);
+		this.usage = { tokens: 0, messages: 0 };
+		const after = this.contextTokens();
+		events.onCleared?.({ before, after, count: positions.length });
+		events.onUsage?.(after);
+		return true;
+	}
+
+	/**
+	 * Make room automatically: clear old tool output first, and only summarise if
+	 * that didn't free enough. If summarising fails, say so and carry on.
+	 */
+	private async autoCompact(events: AgentEvents, signal: AbortSignal, options: { extra?: number; continueTask: boolean }): Promise<void> {
+		// Clearing should leave real room, or the next few steps would need it again.
+		if (this.clearOldOutput(events) && !this.needsCompacting(options.extra, this.autoCompactPercent * 0.75)) return;
 		try {
-			await this.compact(events, signal, { auto: true });
+			await this.compact(events, signal, { auto: true, continueTask: options.continueTask });
 		} catch (error) {
 			if (signal.aborted) return;
 			events.onNotice?.(`Couldn't compact the conversation: ${(error as Error).message}`, 'warning');
@@ -182,8 +238,9 @@ export class Agent {
 		this.currentPrompt = prompt;
 		const content = withNotes(prompt, this.notes.splice(0), this.hookContext.splice(0), this.helperReports.splice(0));
 		// Compact before adding the new prompt, so the prompt itself stays word for word.
-		if (this.needsCompacting(Math.ceil(content.length / 4))) {
-			await this.autoCompact(events, signal);
+		const extra = Math.ceil(content.length / 4);
+		if (this.needsCompacting(extra)) {
+			await this.autoCompact(events, signal, { extra, continueTask: false });
 			if (signal.aborted) return 'interrupted';
 		}
 		this.push({ role: 'user', content });
@@ -193,7 +250,7 @@ export class Agent {
 
 		for (let step = 0; step < MAX_STEPS; step++) {
 			if (step > 0 && this.needsCompacting()) {
-				await this.autoCompact(events, signal);
+				await this.autoCompact(events, signal, { continueTask: true });
 				if (signal.aborted) return 'interrupted';
 			}
 			let reply: StreamResult;
@@ -222,7 +279,7 @@ export class Agent {
 				if (error instanceof ModelError && isContextOverflow(error.message) && !overflowRetried && this.messages.length > 1) {
 					overflowRetried = true;
 					events.onNotice?.('The conversation no longer fits in the context window, so Jane is compacting it.', 'warning');
-					await this.compact(events, signal, { auto: true });
+					await this.compact(events, signal, { auto: true, continueTask: true });
 					step--;
 					continue;
 				}
@@ -232,7 +289,7 @@ export class Agent {
 					events.onDiscard?.();
 					// The new host may have a smaller context: make the conversation fit first.
 					if (this.needsCompacting()) {
-						await this.autoCompact(events, signal);
+						await this.autoCompact(events, signal, { continueTask: true });
 						if (signal.aborted) return 'interrupted';
 					}
 					step--;
