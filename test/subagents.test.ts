@@ -20,6 +20,7 @@ async function fakeHost(): Promise<Fake> {
 		let body = '';
 		req.on('data', (d) => (body += d));
 		req.on('end', () => {
+			if (req.method === 'GET' && !req.url?.endsWith('/models')) return res.writeHead(404).end();
 			if (req.url?.endsWith('/models')) return res.writeHead(200).end('{"data":[]}');
 			fake.requests.push(JSON.parse(body));
 			const reply = fake.replies.shift() ?? { content: 'out of replies' };

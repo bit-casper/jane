@@ -4,6 +4,8 @@ import { structuredPatch } from 'diff';
 export type ToolContext = {
 	cwd: string;
 	signal: AbortSignal;
+	/** Whether the model can see images: false if the host said no, undefined if it didn't say. */
+	vision?: boolean;
 };
 
 /** One line of a rendered diff. `old`/`new` are line numbers. */
@@ -23,6 +25,8 @@ export type ToolResult = {
 	output: string;
 	isError?: boolean;
 	display?: ToolDisplay;
+	/** Image files for the model to look at, sent along with the output. */
+	images?: string[];
 };
 
 export type ParamSpec = {

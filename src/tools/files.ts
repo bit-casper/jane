@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { ImageError, checkImage, isImagePath } from '../images.js';
 import {
 	type Tool,
 	ToolError,
@@ -37,13 +38,36 @@ async function exists(file: string): Promise<boolean> {
 	}
 }
 
+function readImage(file: string, cwd: string, vision: boolean | undefined) {
+	const shown = displayPath(cwd, file);
+	let size: number;
+	try {
+		size = checkImage(file);
+	} catch (error) {
+		throw new ToolError((error as ImageError).message.replace(file, shown));
+	}
+	if (vision === false) {
+		throw new ToolError(
+			`${shown} is an image, but the model in use can't see images (its server has no vision support). ` +
+				"Tell the user you can't look at it with this model. Don't try to work out what's in it some other way.",
+		);
+	}
+	return {
+		output: `Image ${shown} (${Math.max(1, Math.round(size / 1024))} KB). It's attached, so you can see it.`,
+		images: [file],
+		display: { summary: 'Looked at the image' },
+	};
+}
+
 type ReadArgs = { path: string; offset?: number; limit?: number };
 
 export const readTool: Tool<ReadArgs> = {
 	name: 'read',
 	description:
-		'Read a text file. Returns lines prefixed with their line number. ' +
-		`Reads up to ${DEFAULT_LINES} lines; use offset and limit for longer files.`,
+		'Read a text file, or look at an image. Text comes back as lines prefixed with their line number; ' +
+		`reads up to ${DEFAULT_LINES} lines, use offset and limit for longer files. ` +
+		'Images (.png, .jpg, .gif, .webp) are shown to you, so you see the picture itself: use this to look at an image ' +
+		'instead of analysing it with Python or other commands.',
 	params: {
 		path: { type: 'string', description: 'File path, absolute or relative to the working directory', required: true },
 		offset: { type: 'integer', description: 'Line number to start from (1-based)' },
@@ -51,8 +75,9 @@ export const readTool: Tool<ReadArgs> = {
 	},
 	needsPermission: false,
 	label: (args, { cwd }) => displayPath(cwd, resolvePath(cwd, args.path)),
-	async run(args, { cwd }) {
+	async run(args, { cwd, vision }) {
 		const file = resolvePath(cwd, args.path);
+		if (isImagePath(file)) return readImage(file, cwd, vision);
 		const text = await readText(file, cwd);
 		if (text.length === 0) return { output: '(empty file)', display: { summary: 'Empty file' } };
 		const lines = text.split('\n');

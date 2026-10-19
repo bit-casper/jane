@@ -11,7 +11,8 @@ export type Host = {
 	apiKey?: string;
 };
 
-export type HostStatus = { ok: true; models: string[] } | { ok: false; reason: string };
+/** `vision`: whether the model can see images; undefined if the server doesn't say. */
+export type HostStatus = { ok: true; models: string[]; vision?: boolean } | { ok: false; reason: string };
 
 export const LOCAL_HOST = 'local';
 const PROBE_TIMEOUT_MS = 1500;
@@ -52,12 +53,34 @@ export async function probe(host: Host, timeoutMs = PROBE_TIMEOUT_MS): Promise<H
 	}
 	if (response.status === 401 || response.status === 403) return { ok: false, reason: 'wrong or missing API key' };
 	if (!response.ok) return { ok: false, reason: `server error ${response.status}` };
+	let models: string[] = [];
 	try {
 		const json = (await response.json()) as { data?: { id: string }[] };
-		return { ok: true, models: (json.data ?? []).map((m) => m.id) };
+		models = (json.data ?? []).map((m) => m.id);
 	} catch {
-		return { ok: true, models: [] };
+		// Up, but with an odd answer; the chat request will tell.
 	}
+	return { ok: true, models, vision: await hasVision(host, timeoutMs) };
+}
+
+/** Ask llama-server whether its model can see images (GET /props). Undefined for other servers. */
+async function hasVision(host: Host, timeoutMs: number): Promise<boolean | undefined> {
+	try {
+		const response = await fetch(`${host.baseUrl.replace(/\/v1\/?$/, '')}/props`, {
+			headers: host.apiKey ? { Authorization: `Bearer ${host.apiKey}` } : {},
+			signal: AbortSignal.timeout(timeoutMs),
+		});
+		if (!response.ok) return undefined;
+		const json = (await response.json()) as { modalities?: { vision?: unknown } };
+		return typeof json.modalities?.vision === 'boolean' ? json.modalities.vision : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/** Whether the host's model can see images, as far as we know. */
+export function hostVision(status: HostStatus | undefined): boolean | undefined {
+	return status?.ok ? status.vision : undefined;
 }
 
 export function describeHost(host: Host): string {

@@ -1,17 +1,59 @@
 // A small client for OpenAI-compatible chat completion servers (llama-server,
 // vLLM, LM Studio, ...). It only ever talks to the configured base URL.
 
+import { imageDataUrl } from './images.js';
+
 export type ToolCall = {
 	id: string;
 	type: 'function';
 	function: { name: string; arguments: string };
 };
 
+// `images` are paths of image files the model should see. They're read when a
+// request is sent (see toWire), so messages and sessions stay small.
 export type ChatMessage =
 	| { role: 'system'; content: string }
-	| { role: 'user'; content: string }
+	| { role: 'user'; content: string; images?: string[] }
 	| { role: 'assistant'; content: string | null; tool_calls?: ToolCall[] }
-	| { role: 'tool'; tool_call_id: string; content: string };
+	| { role: 'tool'; tool_call_id: string; content: string; images?: string[] };
+
+type ContentPart = { type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } };
+
+function withImages(text: string, images: string[]): ContentPart[] {
+	const parts: ContentPart[] = [{ type: 'text', text }];
+	for (const file of images) {
+		const url = imageDataUrl(file);
+		parts.push(url ? { type: 'image_url', image_url: { url } } : { type: 'text', text: `[Image no longer available: ${file}]` });
+	}
+	return parts;
+}
+
+/**
+ * Messages as the server wants them. Images become image parts. Images from
+ * tool results go in a user message right after the results, because not
+ * every server accepts images in a tool result.
+ */
+export function toWire(messages: ChatMessage[]): unknown[] {
+	const wire: unknown[] = [];
+	let pending: string[] = [];
+	const flush = () => {
+		if (pending.length) wire.push({ role: 'user', content: withImages(`[Images from the tool results above: ${pending.join(', ')}]`, pending) });
+		pending = [];
+	};
+	for (const m of messages) {
+		if (m.role !== 'tool') flush();
+		if (m.role === 'user' && m.images?.length) wire.push({ role: 'user', content: withImages(m.content, m.images) });
+		else if (m.role === 'tool' && m.images?.length) {
+			wire.push({ role: 'tool', tool_call_id: m.tool_call_id, content: m.content });
+			pending.push(...m.images);
+		} else {
+			const { images: _, ...rest } = m as ChatMessage & { images?: string[] };
+			wire.push(rest);
+		}
+	}
+	flush();
+	return wire;
+}
 
 export type ToolSchema = {
 	type: 'function';
@@ -54,7 +96,11 @@ function headers(apiKey?: string): Record<string, string> {
 async function request(url: string, init: RequestInit): Promise<Response> {
 	let response: Response;
 	try {
-		response = await fetch(url, init);
+		response = await fetch(url, init).catch((error: unknown) => {
+			// A kept-alive connection the server had already closed, before it answered: try once more on a new one.
+			if ((error as { cause?: { code?: string } }).cause?.code === 'UND_ERR_SOCKET' && !init.signal?.aborted) return fetch(url, init);
+			throw error;
+		});
 	} catch (error) {
 		if ((error as Error).name === 'AbortError') throw error;
 		const cause = (error as { cause?: { code?: string } }).cause?.code;
@@ -156,7 +202,7 @@ export async function streamChat(
 		signal: options.signal,
 		body: JSON.stringify({
 			model: options.model,
-			messages: options.messages,
+			messages: toWire(options.messages),
 			tools: options.tools.length ? options.tools : undefined,
 			stream: true,
 			stream_options: { include_usage: true },

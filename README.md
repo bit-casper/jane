@@ -87,6 +87,26 @@ Nothing disappears from your screen, and `--resume` still shows the whole
 conversation; only the model works from the summary. Turn automatic compaction
 off or change when it happens with `compact.auto` and `compact.at_percent`.
 
+### Images
+
+With a vision model, Jane can look at pictures:
+
+- **Paste one:** copy an image (or image files in a file manager) and press
+  **Ctrl+V** in Jane's prompt. It shows up as `[Image #1]`. Pasted images are
+  saved in `~/.local/share/jane/images/`.
+- **Name one:** an image file in your message (typed, or dragged into the
+  terminal) is sent along, e.g. `what's wrong with screenshot.png?`.
+- **Ask her to look:** `read` on a `.png`, `.jpg`, `.gif` or `.webp` shows her
+  the picture itself, e.g. "describe the images in this folder".
+
+The model server needs its vision part: for llama.cpp, start `llama-server`
+with `--mmproj <file>` (the model's `mmproj-*.gguf`). Jane asks each host
+whether it can see images (`/host` says "sees images"); on one that can't,
+she says so instead of guessing. Each image takes up to about 1,000 tokens
+(`--image-max-tokens 1024`). Old images are dropped when Jane makes room in
+the context, and she can look again with `read`. Pasting needs `wl-paste`
+(Wayland) or `xclip` (X11).
+
 ### Other machines (hosts)
 
 Jane can use a stronger machine, like a PC at home, whenever it's reachable,
@@ -510,6 +530,9 @@ llama-server -m model.gguf --alias my-model --jinja -c 131072 \
   --host 0.0.0.0 --port 8080 --api-key <key>
 ```
 
+To let Jane see images there, add the model's vision file:
+`--mmproj mmproj.gguf --image-max-tokens 1024` (see [Images](#images)).
+
 ### Making it reachable
 
 1. **Open the port** in the other machine's firewall, for your home or local
@@ -569,6 +592,7 @@ Vulkan build crashed on long prompts of normal text.
 | What | Where |
 |---|---|
 | Sessions | `~/.local/share/jane/sessions/` |
+| Pasted images | `~/.local/share/jane/images/` |
 | Undo copies | next to each session, in `<session>.checkpoints/` |
 | Error log | `~/.local/state/jane/jane.log` |
 

@@ -241,6 +241,16 @@ Next:
       compaction)
     - Later: project memory (a small index loaded at startup, with facts read
       when needed)
+16. ✅ **Images**: let a vision model see pictures. Qwen3.6 can already see; the
+    server only needs its `mmproj` file (`llm-serve` loads it when it's next to
+    the model; on the laptop it runs on the CPU, about 16 s per new image).
+    - Ctrl+V pastes a copied image (or copied image files) as `[Image #n]`
+    - Image files named in a prompt (typed or dragged in) are sent along
+    - `read` on an image shows the picture itself
+    - Jane asks each host whether it has vision (llama-server's `/props`);
+      without it, she says so instead of analysing pixels with Python
+    - Messages store image paths, not the images; old images are dropped
+      when the context fills up
 
 ## Workflow
 
