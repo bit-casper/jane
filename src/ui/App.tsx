@@ -13,7 +13,7 @@ import { compileBlockList } from '../blocklist.js';
 import { type Host, type HostManager, LOCAL_HOST, describeHost, hostVision, hostsPromptSection, probe } from '../hosts.js';
 import { type Hook, type HookEvent, type HookPayload, type HookRun, blockMessage, fingerprint, hookProblem, isTrusted, isTrustedPrint, runHooks, shortCommand, trust, trustPrint } from '../hooks.js';
 import { herdr } from '../herdr.js';
-import { McpManager, type McpServerConfig } from '../mcp.js';
+import { McpManager, type McpServerConfig, mcpFingerprint } from '../mcp.js';
 import { HELPER_INSTRUCTIONS, type Helper, Helpers, makeAgentTool, reportText, seconds as helperSeconds } from '../subagents.js';
 import { log } from '../log.js';
 import { watchOmarchyTheme } from '../omarchy.js';
@@ -128,11 +128,6 @@ type PendingPermission = {
 };
 
 type TrustRequest = { kind: 'hooks'; hooks: Hook[] } | { kind: 'mcp'; servers: Record<string, McpServerConfig> };
-
-/** What identifies a project's MCP servers for trust: if any of this changes, Jane asks again. */
-function mcpFingerprint(servers: Record<string, McpServerConfig>): string {
-	return fingerprint(Object.entries(servers).map(([name, { command, url, env, headers }]) => ({ name, command, url, env, headers })));
-}
 
 function describeMcpStatus(manager: McpManager, name: string): string {
 	const status = manager.status.get(name);

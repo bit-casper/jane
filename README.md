@@ -55,6 +55,27 @@ jane --host remote   # use this host instead of the first one that answers
 
 Commands: `/clear`, `/model [name]`, `/permissions [mode]`, `/settings`, `/skills`, `/<skill> [request]`, `/prompt [init|diff]`, `/undo`, `/compact [focus]`, `/host [name]`, `/agents [id]`, `/hooks [allow]`, `/mcp [name]`, `/help`, `/exit`.
 
+### Without the interface (`jane -p`)
+
+`jane -p` runs one task and prints Jane's answer, so a script or another
+agent can hand her work:
+
+```sh
+jane -p "summarise the open TODOs in src/"         # answer on stdout
+jane -p -r <id> "now fix the first one"            # continue that session
+echo "what changed today?" | jane -p               # the task on stdin
+jane -p --output-format json "…"                   # {"result", "outcome", "session_id", "tokens"}
+```
+
+Progress (tool calls, compaction) goes to stderr, the answer to stdout. The
+exit code is 0 when she finished, 1 on an error (such as the model server),
+and 2 when she was stopped. Nobody can answer permission questions here, so
+Jane runs unrestricted unless you pass `--mode always-ask`, in which case
+anything that needs permission is refused. The block list and your hooks
+still apply; a project's hooks and MCP servers only run once you've allowed
+them in the interface. Helpers run in the foreground. Sessions are saved as
+usual, so you can open one in the interface with `/resume`.
+
 ### Permission modes
 
 - **always-ask** (default): reading and searching files happens without asking.

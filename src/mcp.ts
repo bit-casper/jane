@@ -9,6 +9,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
+import { fingerprint } from './hooks.js';
 import type { Tool, ToolResult } from './tools/types.js';
 import { truncateMiddle } from './tools/types.js';
 
@@ -102,6 +103,11 @@ export function toJaneTool(server: string, info: McpToolInfo, call: (args: Recor
 type Connection = { client: Client; transport: { close(): Promise<void> }; tools: Tool<Record<string, unknown>>[]; stderr: string };
 
 /** Starts or connects to the configured servers and keeps their tools up to date. */
+/** What identifies a project's MCP servers for trust: if any of this changes, Jane asks again. */
+export function mcpFingerprint(servers: Record<string, McpServerConfig>): string {
+	return fingerprint(Object.entries(servers).map(([name, { command, url, env, headers }]) => ({ name, command, url, env, headers })));
+}
+
 export class McpManager {
 	readonly status = new Map<string, McpStatus>();
 	private connections = new Map<string, Connection>();

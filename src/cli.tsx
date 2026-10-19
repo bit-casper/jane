@@ -6,6 +6,7 @@ import { type PermissionMode, loadConfig } from './config.js';
 import { herdr } from './herdr.js';
 import { log } from './log.js';
 import { HostManager, hostsFromConfig } from './hosts.js';
+import { runPrint } from './print.js';
 import { listSessions } from './session.js';
 import { App, type Overrides, type Start, applyOverrides } from './ui/App.js';
 
@@ -13,8 +14,15 @@ const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const version = (JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')) as { version: string }).version;
 
 const USAGE = `Usage: jane [options]
+       jane -p "task" [options]
 
 Options:
+  -p, --print [task]    Run one task without the interface and print Jane's answer
+                        (the task can also come on stdin). Progress goes to stderr.
+                        Jane runs unrestricted unless --mode says otherwise; the
+                        block list and hooks still apply.
+      --output-format <format>
+                        With -p: "text" (default) or "json"
   -c, --continue        Continue the most recent session in this directory
   -r, --resume [id]     Pick a session to resume, or resume the one with this id
   -m, --model <name>    Use this model for this run
@@ -23,7 +31,17 @@ Options:
   -v, --version         Show the version
   -h, --help            Show this help`;
 
-type Args = { continue: boolean; resume: boolean; resumeId?: string; model?: string; mode?: string; host?: string };
+type Args = {
+	continue: boolean;
+	resume: boolean;
+	resumeId?: string;
+	model?: string;
+	mode?: string;
+	host?: string;
+	print: boolean;
+	task?: string;
+	format: string;
+};
 
 function fail(message: string): never {
 	process.stderr.write(`jane: ${message}\n`);
@@ -31,7 +49,7 @@ function fail(message: string): never {
 }
 
 function parseCli(argv: string[]): Args {
-	const args: Args = { continue: false, resume: false };
+	const args: Args = { continue: false, resume: false, print: false, format: 'text' };
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i]!;
 		const next = () => {
@@ -49,7 +67,12 @@ function parseCli(argv: string[]): Args {
 		else if (arg === '-r' || arg === '--resume') {
 			args.resume = true;
 			if (argv[i + 1] && !argv[i + 1]!.startsWith('-')) args.resumeId = argv[++i];
-		} else if (arg === '-m' || arg === '--model') args.model = next();
+		} else if (arg === '-p' || arg === '--print') {
+			args.print = true;
+			if (argv[i + 1] !== undefined && !argv[i + 1]!.startsWith('-')) args.task = argv[++i];
+		} else if (arg === '--output-format') args.format = next();
+		else if (args.print && args.task === undefined && !arg.startsWith('-')) args.task = arg;
+		else if (arg === '-m' || arg === '--model') args.model = next();
 		else if (arg === '--mode') args.mode = next();
 		else if (arg === '--host') args.host = next();
 		else fail(`unknown option ${arg}\n\n${USAGE}`);
@@ -58,7 +81,12 @@ function parseCli(argv: string[]): Args {
 }
 
 const args = parseCli(process.argv.slice(2));
-if (!process.stdin.isTTY || !process.stdout.isTTY) fail('Jane needs an interactive terminal.');
+if (args.print) {
+	if (args.format !== 'text' && args.format !== 'json') fail('--output-format must be "text" or "json"');
+	if (args.resume && !args.resumeId) fail('with -p, --resume needs a session id (the picker needs the interface)');
+	if (args.task === undefined && !process.stdin.isTTY) args.task = fs.readFileSync(0, 'utf8');
+	if (!args.task?.trim()) fail('-p needs a task: jane -p "what to do" (or pipe it in)');
+} else if (!process.stdin.isTTY || !process.stdout.isTTY) fail('Jane needs an interactive terminal.');
 
 const cwd = process.cwd();
 const { config, warnings } = loadConfig(cwd);
@@ -100,6 +128,21 @@ if (args.continue || args.resume) {
 	} else {
 		start = { kind: 'pick', sessions };
 	}
+}
+
+if (args.print) {
+	process.on('unhandledRejection', (error) => log('unhandled rejection', error));
+	const code = await runPrint({
+		prompt: args.task!,
+		cwd,
+		config,
+		hosts,
+		notes: [...warnings.map((w) => `config: ${w}`), ...hostNotes],
+		resume: start.kind === 'load' ? start.session : undefined,
+		mode: args.mode as PermissionMode | undefined,
+		json: args.format === 'json',
+	});
+	process.exit(code);
 }
 
 let exitInfo: { sessionId?: string; started: boolean } = { started: false };
