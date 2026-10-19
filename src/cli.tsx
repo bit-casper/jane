@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { render } from 'ink';
 import { type PermissionMode, loadConfig } from './config.js';
+import { herdr } from './herdr.js';
 import { log } from './log.js';
 import { HostManager, hostsFromConfig } from './hosts.js';
 import { listSessions } from './session.js';
@@ -128,6 +129,7 @@ process.on('uncaughtException', (error) => log('uncaught exception', error));
 process.on('unhandledRejection', (error) => log('unhandled rejection', error));
 
 await instance.waitUntilExit();
+herdr.release();
 if (exitInfo.started && exitInfo.sessionId) {
 	process.stdout.write(`\nResume this session with: jane --resume ${exitInfo.sessionId}\n`);
 }
