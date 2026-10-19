@@ -226,6 +226,21 @@ Next:
 13. ✅ **Web tools**: fetch pages and search the web. Off by default.
 14. **Import Claude Code history**: convert Claude Code sessions into Jane
     sessions
+15. **Better compaction**: after compacting, the local model often acted as
+    if starting from scratch: it lost the task it was in the middle of and
+    waited for the user. Ideas taken from Claude Code.
+    - ✅ Clear old tool output first; only summarise if that isn't enough
+    - ✅ Keep the newest messages (up to 25% of the context) word for word and
+      summarise only the older part. If the user's latest request isn't kept,
+      it goes into the summary word for word.
+    - ✅ A summary prompt that leads with the current task, progress and next
+      step, and marks every user message done, open or replaced
+    - ✅ After compacting mid-task, tell Jane to carry on
+    - Next PR: a `todo` tool (a task list that survives compaction) and a
+      `recall` tool (search the saved session for details from before a
+      compaction)
+    - Later: project memory (a small index loaded at startup, with facts read
+      when needed)
 
 ## Workflow
 

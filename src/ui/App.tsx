@@ -521,9 +521,13 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 			onCompacting() {
 				setCompacting(true);
 			},
-			onCompacted({ before, after, auto }) {
+			onCompacted({ before, after, auto, kept }) {
 				setCompacting(false);
-				info(`Conversation compacted${auto ? ' automatically' : ''}: ${formatTokens(before)} → ${formatTokens(after)} tokens. Jane continues from a summary.`);
+				const rest = kept ? ` and the last ${kept} message${kept === 1 ? '' : 's'}` : '';
+				info(`Conversation compacted${auto ? ' automatically' : ''}: ${formatTokens(before)} → ${formatTokens(after)} tokens. Jane continues from a summary${rest}.`);
+			},
+			onCleared({ before, after, count }) {
+				info(`Cleared old tool output to save space (${count} result${count === 1 ? '' : 's'}): ${formatTokens(before)} → ${formatTokens(after)} tokens.`);
 			},
 			onNotice: info,
 			askPermission(request) {

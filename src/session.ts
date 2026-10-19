@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { ChatMessage } from './client.js';
-import { isSummary } from './compact.js';
+import { clearToolOutputs, isSummary } from './compact.js';
 import type { PermissionMode } from './config.js';
 import { projectSlug, sessionsDir } from './paths.js';
 import type { ToolResult } from './tools/types.js';
@@ -11,7 +11,10 @@ export type SessionEntry =
 	| { type: 'meta'; id: string; cwd: string; created: string; model: string }
 	| { type: 'message'; message: ChatMessage; time: string }
 	| { type: 'tool-display'; toolCallId: string; label: string; result: ToolResult }
-	| { type: 'compact'; tokensBefore: number; time: string }
+	/** `kept`: how many of the newest messages stay after the summary (missing in older sessions: none). */
+	| { type: 'compact'; tokensBefore: number; kept?: number; time: string }
+	/** The tool results at these positions (in the messages the model gets) were replaced by a short note to save space. */
+	| { type: 'clear'; positions: number[]; time: string }
 	| { type: 'mode'; mode: PermissionMode }
 	| { type: 'model'; model: string };
 
@@ -100,9 +103,16 @@ export class Session {
 		this.write({ type: 'tool-display', toolCallId, label, result: { output: '', isError: result.isError, display } });
 	}
 
-	/** The conversation is about to be replaced by a summary (which is added as the next message). */
-	addCompaction(tokensBefore: number): void {
-		this.write({ type: 'compact', tokensBefore, time: new Date().toISOString() });
+	/**
+	 * The conversation is about to be replaced by a summary (which is added as
+	 * the next message), followed by the newest `kept` messages.
+	 */
+	addCompaction(tokensBefore: number, kept = 0): void {
+		this.write({ type: 'compact', tokensBefore, kept, time: new Date().toISOString() });
+	}
+
+	addClear(positions: number[]): void {
+		this.write({ type: 'clear', positions, time: new Date().toISOString() });
 	}
 
 	setMode(mode: PermissionMode): void {
@@ -130,11 +140,17 @@ function readEntries(file: string): SessionEntry[] {
 
 export function loadSession(file: string): LoadedSession {
 	const result: LoadedSession = { messages: [], allMessages: [], toolDisplays: new Map() };
+	// Messages kept at a compaction; they go back in right after the summary.
+	let kept: ChatMessage[] | undefined;
 	for (const entry of readEntries(file)) {
 		if (entry.type === 'message') {
-			result.messages.push(entry.message);
+			result.messages.push(entry.message, ...(kept ?? []));
 			result.allMessages.push(entry.message);
-		} else if (entry.type === 'compact') result.messages = [];
+			kept = undefined;
+		} else if (entry.type === 'compact') {
+			kept = entry.kept ? result.messages.slice(-entry.kept) : [];
+			result.messages = [];
+		} else if (entry.type === 'clear') clearToolOutputs(result.messages, entry.positions);
 		else if (entry.type === 'tool-display') result.toolDisplays.set(entry.toolCallId, { label: entry.label, result: entry.result });
 		else if (entry.type === 'mode') result.mode = entry.mode;
 		else if (entry.type === 'model') result.model = entry.model;
