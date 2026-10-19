@@ -251,6 +251,19 @@ Next:
       without it, she says so instead of analysing pixels with Python
     - Messages store image paths, not the images; old images are dropped
       when the context fills up
+17. ✅ **herdr support**: report working, idle and blocked (permission or trust
+    question) to herdr, with a resume command (herdr 0.9.2+), and release
+    the pane on exit, so herdr notifies when Jane is done or needs a decision
+18. ✅ **Print mode** (`jane -p`): run one task without the interface, so
+    another agent (Claude Code, as lead) can hand Jane the heavy lifting.
+    - Answer on stdout, progress on stderr; `--output-format json`
+    - Exit codes: 0 done, 1 error, 2 stopped
+    - Sessions saved as usual; `-r <id>` / `-c` continue them; the task can
+      come on stdin
+    - Unrestricted by default (decided with Casper: rely on the block list);
+      `--mode always-ask` refuses anything that needs permission
+    - Untrusted project hooks and MCP servers are skipped with a warning;
+      helpers run in the foreground; no herdr reports
 
 ## Workflow
 
