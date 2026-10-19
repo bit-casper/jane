@@ -7,6 +7,7 @@
 //    the most recent messages word for word, so Jane can carry on mid-task.
 
 import type { ChatMessage } from './client.js';
+import { IMAGE_TOKENS } from './images.js';
 
 /** Start of the user message that carries a summary. Used to recognise it later. */
 export const SUMMARY_MARKER = '[Note from Jane: this conversation was compacted to save space. Summary of everything before this point:]';
@@ -22,6 +23,9 @@ const CONTINUE_NOTE =
 
 /** What replaces a tool result that was cleared to save space. */
 export const CLEARED_OUTPUT = '[Old tool output cleared to save space. Run the tool again if you need it.]';
+
+/** Added to a message whose images were cleared to save space. */
+const imagesCleared = (files: string[]) => `[Image${files.length === 1 ? '' : 's'} removed to save space: ${files.join(', ')}. Look again with read if you need to.]`;
 
 /** Tool output shorter than this isn't worth clearing. */
 const MIN_CLEAR_CHARS = 400;
@@ -116,13 +120,14 @@ export function transcript(messages: ChatMessage[], maxResult: number, keepFrom?
 	const parts: string[] = [];
 	messages.forEach((m, i) => {
 		if (i === keepFrom) parts.push(KEPT_LINE);
+		const images = (m.role === 'user' || m.role === 'tool') && m.images?.length ? `\n[image: ${m.images.join(', ')}]` : '';
 		if (m.role === 'user') {
-			parts.push(isSummary(m) ? `[Summary of earlier conversation]\n${summaryText(m)}` : `User: ${m.content}`);
+			parts.push(isSummary(m) ? `[Summary of earlier conversation]\n${summaryText(m)}` : `User: ${m.content}${images}`);
 		} else if (m.role === 'assistant') {
 			if (m.content?.trim()) parts.push(`Jane: ${m.content}`);
 			for (const call of m.tool_calls ?? []) parts.push(`Jane used ${call.function.name}: ${cut(call.function.arguments, maxResult)}`);
 		} else if (m.role === 'tool') {
-			parts.push(`Result: ${cut(m.content, maxResult)}`);
+			parts.push(`Result: ${cut(m.content, maxResult)}${images}`);
 		}
 	});
 	return parts.join('\n\n');
@@ -144,6 +149,7 @@ export function fittingTranscript(messages: ChatMessage[], budgetTokens: number,
 
 function size(m: ChatMessage): number {
 	let chars = (m.content ?? '').length;
+	if ((m.role === 'user' || m.role === 'tool') && m.images) chars += m.images.length * IMAGE_TOKENS * 4;
 	if (m.role === 'assistant') for (const c of m.tool_calls ?? []) chars += c.function.arguments.length + 20;
 	return chars;
 }
@@ -166,8 +172,9 @@ export function keptStart(messages: ChatMessage[], keepTokens: number): number {
 }
 
 /**
- * Positions of long tool results older than the newest `keepTokens` worth of
- * messages. Results the model hasn't replied to yet are never cleared.
+ * Positions of long tool results, and of messages with images, older than the
+ * newest `keepTokens` worth of messages. Results the model hasn't replied to
+ * yet are never cleared.
  */
 export function oldToolOutputs(messages: ChatMessage[], keepTokens: number): number[] {
 	const found: number[] = [];
@@ -176,17 +183,19 @@ export function oldToolOutputs(messages: ChatMessage[], keepTokens: number): num
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const m = messages[i]!;
 		chars += size(m);
-		if (i > lastReply || chars <= keepTokens * 4 || m.role !== 'tool') continue;
-		if (m.content.length >= MIN_CLEAR_CHARS && m.content !== CLEARED_OUTPUT) found.push(i);
+		if (i > lastReply || chars <= keepTokens * 4) continue;
+		if ((m.role === 'user' || m.role === 'tool') && m.images?.length) found.push(i);
+		else if (m.role === 'tool' && m.content.length >= MIN_CLEAR_CHARS && m.content !== CLEARED_OUTPUT) found.push(i);
 	}
 	return found.reverse();
 }
 
-/** Replace the tool results at these positions with a short note. */
+/** Replace the tool results at these positions with a short note, and drop images from user messages there. */
 export function clearToolOutputs(messages: ChatMessage[], positions: number[]): void {
 	for (const i of positions) {
 		const m = messages[i];
-		if (m?.role === 'tool') messages[i] = { ...m, content: CLEARED_OUTPUT };
+		if (m?.role === 'tool') messages[i] = { role: 'tool', tool_call_id: m.tool_call_id, content: CLEARED_OUTPUT };
+		else if (m?.role === 'user' && m.images?.length) messages[i] = { role: 'user', content: `${m.content}\n\n${imagesCleared(m.images)}` };
 	}
 }
 

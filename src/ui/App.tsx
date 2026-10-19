@@ -8,8 +8,9 @@ import { type Config, type PermissionMode, loadConfig } from '../config.js';
 import { type InstructionFile, loadInstructions } from '../instructions.js';
 import { type Change, Checkpoints } from '../checkpoints.js';
 import { isSummary } from '../compact.js';
+import { checkImage, clipboardImages, clipboardText, imageLabel, imagePathsIn } from '../images.js';
 import { compileBlockList } from '../blocklist.js';
-import { type Host, type HostManager, LOCAL_HOST, describeHost, hostsPromptSection, probe } from '../hosts.js';
+import { type Host, type HostManager, LOCAL_HOST, describeHost, hostVision, hostsPromptSection, probe } from '../hosts.js';
 import { type Hook, type HookEvent, type HookPayload, type HookRun, blockMessage, fingerprint, hookProblem, isTrusted, isTrustedPrint, runHooks, shortCommand, trust, trustPrint } from '../hooks.js';
 import { McpManager, type McpServerConfig } from '../mcp.js';
 import { HELPER_INSTRUCTIONS, type Helper, Helpers, makeAgentTool, reportText, seconds as helperSeconds } from '../subagents.js';
@@ -269,6 +270,8 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 	const [compacting, setCompacting] = useState(false);
 
 	const agentRef = useRef<Agent | null>(null);
+	/** Images pasted this session; [Image #n] in a prompt is the n-th. */
+	const pastedImagesRef = useRef<string[]>([]);
 	const abortRef = useRef<AbortController | null>(null);
 	const liveRef = useRef<Live>({ reasoning: '', content: '' });
 	const exitArmedRef = useRef(0);
@@ -322,6 +325,7 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 			if (config.checkpoints.enabled) agent.checkpoints = new Checkpoints(session.file.replace(/\.jsonl$/, '.checkpoints'));
 			if (config.block_list.enabled) agent.blockRules = compileBlockList(config.block_list.patterns).rules;
 			agent.contextWindow = host.contextWindow;
+			agent.vision = hostVision(hosts.status.get(host.name));
 			agent.autoCompactPercent = config.compact.auto ? config.compact.at_percent : 0;
 			agent.failover = failover;
 			agent.hooks = {
@@ -558,7 +562,7 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 		}
 	};
 
-	const runPrompt = async (prompt: string) => {
+	const runPrompt = async (prompt: string, images: string[] = []) => {
 		const agent = agentRef.current!;
 		const outcome = await work(async (events, signal) => {
 			const runs = await hookRuns('prompt_submit', { prompt }, { stopOnBlock: true });
@@ -573,7 +577,7 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 					info(`Hook "${shortCommand(r.hook.command)}" added context to your message.`);
 				}
 			}
-			return agent.run(prompt, events, signal);
+			return agent.run(prompt, events, signal, images);
 		});
 		if (outcome !== 'blocked') void fireHooks('turn_end', {});
 		if (outcome === 'interrupted') flushLive(true);
@@ -694,10 +698,12 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 			case 'host': {
 				if (!arg) {
 					await hosts.checkAll();
+					if (agentRef.current) agentRef.current.vision = hostVision(hosts.status.get(hosts.current.name));
 					rebuildSystem();
 					const lines = hosts.hosts.map((h) => {
 						const status = hosts.status.get(h.name);
-						const state = h === hosts.current ? 'in use' : status?.ok ? 'reachable' : `not reachable: ${status && !status.ok ? status.reason : 'unknown'}`;
+						const sees = status?.ok && status.vision ? ', sees images' : '';
+						const state = (h === hosts.current ? 'in use' : status?.ok ? 'reachable' : `not reachable: ${status && !status.ok ? status.reason : 'unknown'}`) + sees;
 						return `  ${h === hosts.current ? '●' : ' '} ${h.name.padEnd(10)} ${describeHost(h).padEnd(36)} ${state}\n      ${h.baseUrl}`;
 					});
 					const more = multiHost ? 'Switch with /host <name>.' : 'Add other machines as [[hosts]] in ~/.config/jane/config.toml.';
@@ -878,8 +884,50 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 			return;
 		}
 		push({ key: key(), kind: 'user', text });
-		void runPrompt(text);
+		void runPrompt(text, attachedImages(text));
 	};
+
+	/** Images that go with a prompt: pasted ones ([Image #1]) and image files named in it. */
+	function attachedImages(text: string): string[] {
+		const images: string[] = [];
+		for (const match of text.matchAll(/\[Image #(\d+)\]/g)) {
+			const file = pastedImagesRef.current[Number(match[1]) - 1];
+			if (file && !images.includes(file)) images.push(file);
+		}
+		for (const file of imagePathsIn(text, cwd)) if (!images.includes(file)) images.push(file);
+		const usable = images.filter((file) => {
+			try {
+				checkImage(file);
+				return true;
+			} catch (error) {
+				info((error as Error).message, 'warning');
+				return false;
+			}
+		});
+		if (usable.length && agentRef.current?.vision === false) {
+			info(`The model on ${hosts.current.name} can't see images, so ${usable.length === 1 ? "the image wasn't" : "the images weren't"} sent. Start its server with an mmproj file, then check with /host.`, 'warning');
+			return [];
+		}
+		const name = (file: string) => {
+			const n = pastedImagesRef.current.indexOf(file);
+			return n >= 0 ? `Image #${n + 1}` : path.basename(file);
+		};
+		if (usable.length) info(`Attached ${usable.map(name).join(', ')}`);
+		return usable;
+	}
+
+	/** Ctrl+V: images on the clipboard become [Image #n]; otherwise paste the text. */
+	async function pasteClipboard() {
+		const files = await clipboardImages();
+		if (files.length) {
+			const list = pastedImagesRef.current;
+			const labels = files.map((file) => imageLabel(list.includes(file) ? list.indexOf(file) + 1 : list.push(file)));
+			setInput((v) => ed.insert(v, `${labels.join(' ')} `));
+			return;
+		}
+		const text = await clipboardText();
+		if (text) setInput((v) => ed.insert(v, text));
+	}
 
 	/** Run the hooks for an event and tell the user about any that failed. */
 	async function hookRuns(event: HookEvent, payload: HookPayload, options: { stopOnBlock?: boolean } = {}): Promise<HookRun[]> {
@@ -1025,6 +1073,7 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 		if (agent) {
 			agent.settings = { baseUrl: host.baseUrl, apiKey: host.apiKey, model: host.model };
 			agent.contextWindow = host.contextWindow;
+			agent.vision = hostVision(hosts.status.get(host.name));
 			if (agent.session) agent.session.setModel(host.model);
 		}
 		setModel(host.model);
@@ -1271,6 +1320,7 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 				value={input}
 				onChange={setInput}
 				onSubmit={submit}
+				onClipboard={() => void pasteClipboard()}
 				history={promptHistory}
 				suggestions={suggestions}
 				active={!busy && !permission}

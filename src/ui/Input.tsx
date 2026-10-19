@@ -9,13 +9,15 @@ type Props = {
 	value: ed.EditorState;
 	onChange(value: ed.EditorState): void;
 	onSubmit(text: string): void;
+	/** Ctrl+V: paste from the clipboard (an image, or text). */
+	onClipboard?(): void;
 	history: string[];
 	suggestions: Suggestion[];
 	active: boolean;
 	placeholder?: string;
 };
 
-export function Input({ value, onChange, onSubmit, history, suggestions, active, placeholder }: Props) {
+export function Input({ value, onChange, onSubmit, onClipboard, history, suggestions, active, placeholder }: Props) {
 	const colors = useColors();
 	// Position while browsing history; history.length means "not browsing".
 	const historyIndex = useRef(history.length);
@@ -25,6 +27,8 @@ export function Input({ value, onChange, onSubmit, history, suggestions, active,
 
 	usePaste(
 		(text) => {
+			// A terminal can only paste text; an image on the clipboard arrives as an empty paste.
+			if (text === '' && onClipboard) return onClipboard();
 			onChange(ed.insert(value, text));
 		},
 		{ isActive: active },
@@ -76,6 +80,7 @@ export function Input({ value, onChange, onSubmit, history, suggestions, active,
 			if (key.ctrl && input === 'k') return onChange(ed.killToLineEnd(value));
 			if (key.ctrl && input === 'w') return onChange(ed.deleteWordBack(value));
 			if (key.ctrl && input === 'j') return onChange(ed.insert(value, '\n'));
+			if (key.ctrl && input === 'v') return onClipboard?.();
 			if (key.ctrl || key.meta || !input) return;
 			// Typed text and Enter can arrive in one chunk (fast typists, dictation, tmux).
 			if (input.length > 1 && input.endsWith('\r') && !input.slice(0, -1).includes('\r')) {

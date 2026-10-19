@@ -375,6 +375,40 @@ describe('agent loop', () => {
 		});
 	});
 
+	describe('images', () => {
+		const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64');
+		const parts = (m: any) => (Array.isArray(m.content) ? m.content.map((p: any) => p.type) : 'text');
+
+		it('sends images with the prompt and from read, and keeps them on resume', async () => {
+			fs.writeFileSync(path.join(dir, 'cat.png'), PNG);
+			const agent = makeAgent();
+			replies = [{ calls: [{ name: 'read', args: '{"path":"cat.png"}' }] }, { content: 'Both are cats.' }];
+			await agent.run('Is this the same as cat.png?', recorder().events, new AbortController().signal, [path.join(dir, 'pasted.png')]);
+			// The first request has the pasted image (missing here, so a note) with the prompt.
+			expect(requests[0].messages.at(-1).content).toEqual([
+				{ type: 'text', text: 'Is this the same as cat.png?' },
+				{ type: 'text', text: `[Image no longer available: ${path.join(dir, 'pasted.png')}]` },
+			]);
+			// The second has the image read by the tool, in a user message after the tool result.
+			const second = requests[1].messages;
+			expect(second.slice(-3).map((m: any) => m.role)).toEqual(['assistant', 'tool', 'user']);
+			expect(second.at(-2).content).toMatch(/^Image cat\.png/);
+			expect(parts(second.at(-1))).toEqual(['text', 'image_url']);
+			expect(loadSession(agent.session.file).messages).toEqual(agent.messages);
+			expect(agent.messages[2]).toMatchObject({ role: 'tool', images: [path.join(dir, 'cat.png')] });
+		});
+
+		it('tells the model plainly when its host has no vision', async () => {
+			fs.writeFileSync(path.join(dir, 'cat.png'), PNG);
+			const agent = makeAgent();
+			agent.vision = false;
+			replies = [{ calls: [{ name: 'read', args: '{"path":"cat.png"}' }] }, { content: 'I cannot see it.' }];
+			await agent.run('look at cat.png', recorder().events, new AbortController().signal);
+			expect(requests[1].messages.at(-1).content).toMatch(/^Error: cat\.png is an image, but the model in use can't see images/);
+			expect(agent.messages.some((m) => 'images' in m)).toBe(false);
+		});
+	});
+
 	it('runs the beforeTurn hook at the start of every turn', async () => {
 		const agent = makeAgent();
 		let calls = 0;

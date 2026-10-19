@@ -22,9 +22,11 @@ afterEach(() => {
 });
 
 /** A tiny model server: /models, and chat replies that say which server answered. */
-async function fakeServer(name: string, options: { key?: string; dropMidStream?: boolean } = {}): Promise<{ url: string; server: http.Server }> {
+async function fakeServer(name: string, options: { key?: string; dropMidStream?: boolean; vision?: boolean } = {}): Promise<{ url: string; server: http.Server }> {
 	const server = http.createServer((req, res) => {
 		if (options.key && req.headers.authorization !== `Bearer ${options.key}`) return res.writeHead(401).end('{"error":"unauthorized"}');
+		if (req.url === '/props' && options.vision !== undefined) return res.writeHead(200).end(JSON.stringify({ modalities: { vision: options.vision } }));
+		if (req.method === 'GET' && !req.url?.endsWith('/models')) return res.writeHead(404).end();
 		if (req.url?.endsWith('/models')) return res.writeHead(200).end(JSON.stringify({ data: [{ id: `${name}-model` }] }));
 		req.resume();
 		req.on('end', () => {
@@ -85,6 +87,13 @@ describe('probe', () => {
 		expect(await probe({ ...host('home'), baseUrl: url, apiKey: 'secret' })).toEqual({ ok: true, models: ['home-model'] });
 		expect(await probe({ ...host('home'), baseUrl: url, apiKey: 'nope' })).toEqual({ ok: false, reason: 'wrong or missing API key' });
 		expect(await probe({ ...host('home'), baseUrl: 'http://127.0.0.1:9/v1' })).toEqual({ ok: false, reason: 'not reachable' });
+	});
+
+	it('asks llama-server whether the model can see images', async () => {
+		const seeing = await fakeServer('a', { vision: true });
+		const blind = await fakeServer('b', { vision: false });
+		expect(await probe({ ...host('a'), baseUrl: seeing.url })).toEqual({ ok: true, models: ['a-model'], vision: true });
+		expect(await probe({ ...host('b'), baseUrl: blind.url })).toEqual({ ok: true, models: ['b-model'], vision: false });
 	});
 
 	it('gives up on a host that doesn\'t answer in time', async () => {

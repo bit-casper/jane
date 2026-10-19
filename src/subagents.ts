@@ -4,7 +4,7 @@
 // background (the report arrives with the user's next message).
 
 import { Agent, type AgentEvents, type PermissionDecision, type PermissionRequest } from './agent.js';
-import { type Host, type HostManager, probe } from './hosts.js';
+import { type Host, type HostManager, hostVision, probe } from './hosts.js';
 import { Session } from './session.js';
 import { type Tool, ToolError } from './tools/types.js';
 
@@ -112,6 +112,7 @@ export class Helpers {
 		agent.hooks = main.hooks;
 		agent.allowedForSession = main.allowedForSession;
 		agent.contextWindow = host.contextWindow;
+		agent.vision = hostVision(this.hosts.status.get(host.name));
 		agent.autoCompactPercent = main.autoCompactPercent;
 
 		const controller = new AbortController();
@@ -141,6 +142,7 @@ export class Helpers {
 				helper.host = other;
 				agent.settings = { baseUrl: other.baseUrl, apiKey: other.apiKey, model: other.model };
 				agent.contextWindow = other.contextWindow;
+				agent.vision = hostVision(status);
 				this.ui.notice(`Helper "${name}" lost its host, so it moved to ${other.name}.`, 'warning');
 				return true;
 			}

@@ -14,6 +14,7 @@ import {
 import type { PermissionMode } from './config.js';
 import type { Checkpoints } from './checkpoints.js';
 import { type BlockRule, blockedBy, describeRule } from './blocklist.js';
+import { IMAGE_TOKENS } from './images.js';
 import type { Session } from './session.js';
 import { findTool, parseArgs, toolSchemas, tools } from './tools/index.js';
 import { type Tool, type ToolDisplay, ToolError, type ToolResult } from './tools/types.js';
@@ -60,6 +61,7 @@ function estimateMessages(messages: ChatMessage[]): number {
 	let chars = 0;
 	for (const m of messages) {
 		chars += (m.content ?? '').length;
+		if ((m.role === 'user' || m.role === 'tool') && m.images) chars += m.images.length * IMAGE_TOKENS * 4;
 		if (m.role === 'assistant') for (const c of m.tool_calls ?? []) chars += c.function.arguments.length + 20;
 	}
 	return Math.ceil(chars / 4);
@@ -79,6 +81,12 @@ export function withNotes(prompt: string, notes: string[], context: string[] = [
 	if (context.length) head += `[Context from hooks]\n${context.join('\n\n')}\n[End of context from hooks]\n`;
 	if (reports.length) head += `[Reports from helper agents]\n${reports.join('\n\n')}\n[End of reports from helper agents]\n`;
 	return head ? `${head}\n${prompt}` : prompt;
+}
+
+function toolMessage(id: string, result: { output: string; images?: string[] }): ChatMessage {
+	return result.images?.length
+		? { role: 'tool', tool_call_id: id, content: result.output, images: result.images }
+		: { role: 'tool', tool_call_id: id, content: result.output };
 }
 
 /** What the agent asks the user's hooks around a tool call. */
@@ -103,6 +111,8 @@ export class Agent {
 	blockRules: BlockRule[] = [];
 	/** How many tokens the model can hold. */
 	contextWindow = 65536;
+	/** Whether the model can see images: false if the host said no, undefined if it didn't say. */
+	vision?: boolean;
 	/** Compact automatically when the context is fuller than this percentage (0 turns it off). */
 	autoCompactPercent = 80;
 	/** Tokens in use according to the server's last reply, and how many messages that covered. */
@@ -233,17 +243,17 @@ export class Agent {
 	beforeTurn?: () => void;
 
 	/** Run one user turn: the model replies, uses tools, and repeats until it's done. */
-	async run(prompt: string, events: AgentEvents, signal: AbortSignal): Promise<TurnOutcome> {
+	async run(prompt: string, events: AgentEvents, signal: AbortSignal, images: string[] = []): Promise<TurnOutcome> {
 		this.beforeTurn?.();
 		this.currentPrompt = prompt;
 		const content = withNotes(prompt, this.notes.splice(0), this.hookContext.splice(0), this.helperReports.splice(0));
 		// Compact before adding the new prompt, so the prompt itself stays word for word.
-		const extra = Math.ceil(content.length / 4);
+		const extra = Math.ceil(content.length / 4) + images.length * IMAGE_TOKENS;
 		if (this.needsCompacting(extra)) {
 			await this.autoCompact(events, signal, { extra, continueTask: false });
 			if (signal.aborted) return 'interrupted';
 		}
-		this.push({ role: 'user', content });
+		this.push(images.length ? { role: 'user', content, images } : { role: 'user', content });
 		let badCalls = 0;
 		let overflowRetried = false;
 		let failovers = 0;
@@ -312,7 +322,7 @@ export class Agent {
 			// Several helpers asked for in one reply run at the same time.
 			if (reply.toolCalls.length > 1 && reply.toolCalls.every((c) => c.function.name === 'agent')) {
 				const results = await Promise.all(reply.toolCalls.map((call) => this.runCall(call, events, signal)));
-				reply.toolCalls.forEach((call, i) => this.push({ role: 'tool', tool_call_id: call.id, content: results[i]!.output }));
+				reply.toolCalls.forEach((call, i) => this.push(toolMessage(call.id, results[i]!)));
 				if (signal.aborted) return 'interrupted';
 				continue;
 			}
@@ -325,7 +335,7 @@ export class Agent {
 				const result = await this.runCall(call, events, signal);
 				if (result.bad) badCalls++;
 				else badCalls = 0;
-				this.push({ role: 'tool', tool_call_id: call.id, content: result.output });
+				this.push(toolMessage(call.id, result));
 				if (result.denied) outcome = 'denied';
 				else if (badCalls >= MAX_BAD_CALLS) outcome = 'too-many-bad-calls';
 			}
@@ -339,7 +349,7 @@ export class Agent {
 		call: ToolCall,
 		events: AgentEvents,
 		signal: AbortSignal,
-	): Promise<{ output: string; bad?: boolean; denied?: boolean }> {
+	): Promise<{ output: string; images?: string[]; bad?: boolean; denied?: boolean }> {
 		const name = call.function.name;
 		const tool = findTool(name, this.tools);
 		const finish = (label: string, result: ToolResult) => {
@@ -360,7 +370,7 @@ export class Agent {
 		}
 		const args = parsed.args;
 		const label = tool.label(args, { cwd: this.cwd });
-		const ctx = { cwd: this.cwd, signal };
+		const ctx = { cwd: this.cwd, signal, vision: this.vision };
 
 		const rule = tool.name === 'bash' ? blockedBy(String(args['command']), this.blockRules) : undefined;
 		if (rule) {
@@ -434,6 +444,7 @@ export class Agent {
 		}
 		const feedback = await this.hooks?.after({ name, args, label, result });
 		const output = finish(label, result);
-		return { output: feedback ? `${output}\n\n[A hook set up by the user says:]\n${feedback}` : output };
+		const images = result.isError ? undefined : result.images;
+		return { output: feedback ? `${output}\n\n[A hook set up by the user says:]\n${feedback}` : output, images };
 	}
 }
