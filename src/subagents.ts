@@ -78,6 +78,10 @@ export class Helpers {
 		if (requested) {
 			const host = this.hosts.find(requested);
 			if (!host) throw new ToolError(`There is no host called "${requested}". The hosts are: ${this.hosts.hosts.map((h) => h.name).join(', ')}.`);
+			// The model asked for it, not the user: a manual host stays off-limits (unless it's the one in use).
+			if (host.auto === false && host !== this.hosts.current) {
+				throw new ToolError(`The host "${requested}" is manual: only the user can switch to it, so helpers can't run there.`);
+			}
 			const status = await this.check(host);
 			this.hosts.status.set(host.name, status);
 			if (!status.ok) throw new ToolError(`The host "${requested}" isn't available (${status.reason}).`);
@@ -85,7 +89,7 @@ export class Helpers {
 		}
 		const busy = new Set([this.hosts.current.name, ...this.running().map((h) => h.host.name)]);
 		for (const host of this.hosts.hosts) {
-			if (busy.has(host.name)) continue;
+			if (busy.has(host.name) || host.auto === false) continue;
 			const status = await this.check(host);
 			this.hosts.status.set(host.name, status);
 			if (status.ok) return host;
@@ -136,7 +140,7 @@ export class Helpers {
 		agent.failover = async () => {
 			// The helper's host went away: carry on elsewhere if possible.
 			for (const other of this.hosts.hosts) {
-				if (other === helper.host) continue;
+				if (other === helper.host || other.auto === false) continue;
 				const status = await this.check(other);
 				if (!status.ok) continue;
 				helper.host = other;

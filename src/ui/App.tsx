@@ -709,7 +709,8 @@ function Main({ hosts, hostNotes, config, setConfig, overrides, warnings, versio
 					const lines = hosts.hosts.map((h) => {
 						const status = hosts.status.get(h.name);
 						const sees = status?.ok && status.vision ? ', sees images' : '';
-						const state = (h === hosts.current ? 'in use' : status?.ok ? 'reachable' : `not reachable: ${status && !status.ok ? status.reason : 'unknown'}`) + sees;
+						const manual = h.auto === false ? ', manual' : '';
+						const state = (h === hosts.current ? 'in use' : status?.ok ? 'reachable' : `not reachable: ${status && !status.ok ? status.reason : 'unknown'}`) + sees + manual;
 						return `  ${h === hosts.current ? '●' : ' '} ${h.name.padEnd(10)} ${describeHost(h).padEnd(36)} ${state}\n      ${h.baseUrl}`;
 					});
 					const more = multiHost ? 'Switch with /host <name>.' : 'Add other machines as [[hosts]] in ~/.config/jane/config.toml.';
