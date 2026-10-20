@@ -16,6 +16,8 @@ export type HostConfig = {
 	model: string;
 	context_window: number;
 	api_key: string;
+	/** False: Jane never picks this host by herself; only when it's chosen by name (--host, /host, startup.host). */
+	auto: boolean;
 };
 
 export type Config = {
@@ -268,7 +270,7 @@ function parseHosts(value: unknown, warnings: string[]): HostConfig[] {
 	value.forEach((entry, i) => {
 		const where = `hosts #${i + 1}`;
 		if (!isPlain(entry)) return warnings.push(`${where} should be a table`);
-		const { name, base_url, model, context_window = 65536, api_key = '' } = entry as Record<string, unknown>;
+		const { name, base_url, model, context_window = 65536, api_key = '', auto = true } = entry as Record<string, unknown>;
 		const problems: string[] = [];
 		if (typeof name !== 'string' || !/^[\w.-]+$/.test(name)) problems.push('name (letters, digits, - _ .)');
 		else if (name === 'local') problems.push('a name other than "local" (that\'s [model])');
@@ -277,8 +279,9 @@ function parseHosts(value: unknown, warnings: string[]): HostConfig[] {
 		if (typeof model !== 'string' || !model) problems.push('model');
 		if (typeof context_window !== 'number' || !Number.isInteger(context_window) || context_window <= 0) problems.push('context_window (a whole number)');
 		if (typeof api_key !== 'string') problems.push('api_key (a string)');
+		if (typeof auto !== 'boolean') problems.push('auto (true or false)');
 		for (const key of Object.keys(entry)) {
-			if (!['name', 'base_url', 'model', 'context_window', 'api_key'].includes(key)) warnings.push(`${where}: unknown setting "${key}"`);
+			if (!['name', 'base_url', 'model', 'context_window', 'api_key', 'auto'].includes(key)) warnings.push(`${where}: unknown setting "${key}"`);
 		}
 		if (problems.length) return warnings.push(`${where} was skipped: it needs ${problems.join(', ')}`);
 		hosts.push({
@@ -287,6 +290,7 @@ function parseHosts(value: unknown, warnings: string[]): HostConfig[] {
 			model: model as string,
 			context_window: context_window as number,
 			api_key: api_key as string,
+			auto: auto as boolean,
 		});
 	});
 	return hosts;

@@ -106,6 +106,13 @@ describe('helper agents', () => {
 		await expect(helpers.start({ task: 'z', host: 'nas', background: false, signal: signal() })).rejects.toThrow(/no host called "nas"/);
 	});
 
+	it('never use a manual host, not even when the model asks for it by name', async () => {
+		hosts.current = hosts.hosts[1]!; // main conversation on "local"
+		hosts.hosts[0]!.auto = false; // "home" is manual
+		expect((await helpers.pickHost()).name).toBe('local'); // shares the main host instead
+		await expect(helpers.pickHost('home')).rejects.toThrow(/"home" is manual: only the user can switch to it/);
+	});
+
 	it('report back through the agent tool, and run in parallel when asked together', async () => {
 		home.replies = [
 			{ calls: [{ name: 'agent', args: '{"task":"check A","name":"A"}' }, { name: 'agent', args: '{"task":"check B","name":"B","host":"home"}' }] },

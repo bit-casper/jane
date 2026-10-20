@@ -9,6 +9,8 @@ export type Host = {
 	model: string;
 	contextWindow: number;
 	apiKey?: string;
+	/** False: never picked automatically (start, fallback, helpers); only when chosen by name. */
+	auto: boolean;
 };
 
 /** `vision`: whether the model can see images; undefined if the server doesn't say. */
@@ -24,6 +26,7 @@ export function hostsFromConfig(config: Config): Host[] {
 		model: h.model,
 		contextWindow: h.context_window,
 		apiKey: h.api_key || undefined,
+		auto: h.auto,
 	}));
 	const local: Host = {
 		name: LOCAL_HOST,
@@ -31,6 +34,7 @@ export function hostsFromConfig(config: Config): Host[] {
 		model: config.model.name,
 		contextWindow: config.model.context_window,
 		apiKey: config.model.api_key || undefined,
+		auto: true,
 	};
 	// The default host (startup.host) goes first; the rest keep their order. Everything that walks the
 	// list (startup, fallback, "reachable again", /host) then agrees on it.
@@ -123,6 +127,7 @@ export class HostManager {
 			return { host, skipped };
 		}
 		for (const host of this.hosts) {
+			if (host.auto === false) continue;
 			const status = this.status.get(host.name)!;
 			if (status.ok) {
 				this.current = host;
@@ -139,7 +144,7 @@ export class HostManager {
 		const failed = this.current;
 		this.status.set(failed.name, { ok: false, reason: 'stopped answering' });
 		for (const host of this.hosts) {
-			if (host === failed) continue;
+			if (host === failed || host.auto === false) continue;
 			const status = await this.check(host);
 			this.status.set(host.name, status);
 			if (status.ok) {
@@ -158,6 +163,7 @@ export class HostManager {
 	async preferredAvailable(): Promise<Host | undefined> {
 		const index = this.hosts.indexOf(this.current);
 		for (const host of this.hosts.slice(0, index)) {
+			if (host.auto === false) continue;
 			const status = await this.check(host);
 			this.status.set(host.name, status);
 			if (!status.ok) {
@@ -195,7 +201,8 @@ export function hostsPromptSection(manager: HostManager, current: Host = manager
 		for (const h of others) {
 			const status = manager.status.get(h.name);
 			const state = !status ? '' : status.ok ? ' (reachable at the last check)' : ` (not reachable at the last check: ${status.reason})`;
-			lines.push(`  - ${h.name}: ${describe(h)}${state}`);
+			const manual = h.auto !== false ? '' : ' (manual: only the user can switch to it; not available for helpers)';
+			lines.push(`  - ${h.name}: ${describe(h)}${state}${manual}`);
 		}
 	} else {
 		lines.push('- There are no other hosts.');

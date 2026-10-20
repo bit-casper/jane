@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Agent } from '../src/agent.js';
 import { ModelError, streamChat } from '../src/client.js';
 import { defaultConfig, loadConfig } from '../src/config.js';
-import { type Host, type HostStatus, HostManager, hostsFromConfig, probe } from '../src/hosts.js';
+import { type Host, type HostStatus, HostManager, hostsFromConfig, hostsPromptSection, probe } from '../src/hosts.js';
 import { Session } from '../src/session.js';
 
 let dir: string;
@@ -53,8 +53,8 @@ describe('hosts config', () => {
 		const { config, warnings } = loadConfig(dir, [file], () => undefined);
 		expect(warnings).toEqual([]);
 		expect(hostsFromConfig(config)).toEqual([
-			{ name: 'home', baseUrl: 'http://192.168.86.42:8080/v1', model: 'big', contextWindow: 131072, apiKey: 'k' },
-			{ name: 'local', baseUrl: defaultConfig.model.base_url, model: 'small', contextWindow: 65536, apiKey: undefined },
+			{ name: 'home', baseUrl: 'http://192.168.86.42:8080/v1', model: 'big', contextWindow: 131072, apiKey: 'k', auto: true },
+			{ name: 'local', baseUrl: defaultConfig.model.base_url, model: 'small', contextWindow: 65536, apiKey: undefined, auto: true },
 		]);
 	});
 
@@ -78,6 +78,37 @@ describe('hosts config', () => {
 			expect.stringMatching(/hosts #4: unknown setting "colour"$/),
 			expect.stringMatching(/hosts #4 was skipped: it needs base_url/),
 		]);
+	});
+});
+
+describe('manual hosts (auto = false)', () => {
+	const up = async () => ({ ok: true as const, models: [] });
+
+	it('reads auto = false from the config, and rejects a non-boolean', () => {
+		const file = path.join(dir, 'c.toml');
+		fs.writeFileSync(file, `[[hosts]]\nname = "remote"\nbase_url = "http://r/v1"\nmodel = "m"\nauto = false\n\n[[hosts]]\nname = "bad"\nbase_url = "http://b/v1"\nmodel = "m"\nauto = "no"\n`);
+		const { config, warnings } = loadConfig(dir, [file], () => undefined);
+		expect(config.hosts.map((h) => [h.name, h.auto])).toEqual([['remote', false]]);
+		expect(warnings).toEqual([expect.stringMatching(/hosts #2 was skipped: it needs auto \(true or false\)/)]);
+	});
+
+	it('is never picked at startup, as a fallback or as "back again", but can be chosen by name', async () => {
+		const remote = host('remote', { auto: false });
+		const local = host('local');
+		const manager = new HostManager([remote, local], up);
+		expect((await manager.start()).host).toBe(local);
+		expect((await manager.start('remote')).host).toBe(remote);
+
+		manager.current = local;
+		expect(await manager.failover()).toBeUndefined();
+		manager.current = local;
+		expect(await manager.preferredAvailable()).toBeUndefined();
+	});
+
+	it('is described as manual to the model', () => {
+		const manager = new HostManager([host('remote', { auto: false }), host('local')], up);
+		manager.current = manager.hosts[1]!;
+		expect(hostsPromptSection(manager)).toMatch(/remote: .*\(manual: only the user can switch to it; not available for helpers\)/);
 	});
 });
 

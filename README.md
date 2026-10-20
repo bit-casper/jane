@@ -150,7 +150,15 @@ base_url = "http://192.168.86.42:8080/v1"
 model = "qwen3.6-abliterated-q4"
 context_window = 131072
 api_key = "…"                 # the key the server was started with (--api-key)
+# auto = false                # manual: only used when you choose it (see below)
 ```
+
+- **Manual hosts:** with `auto = false`, Jane never picks a host by herself:
+  not at startup, not as a fallback, not for helper agents (even if the model
+  asks for it), and she doesn't mention it being back. It's only used when
+  you choose it by name: `jane --host remote`, `/host remote`, or
+  `startup.host = "remote"`. Useful for a machine you want to keep for other
+  work, e.g. tasks given with `jane -p --host remote`.
 
 - At startup Jane checks all hosts at once (about a second and a half at most)
   and uses the first one in the list that answers; the status line shows which
